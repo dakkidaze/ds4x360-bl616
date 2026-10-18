@@ -556,9 +556,74 @@ void usb_gamepad_process_deferred(void)
     }
 }
 
+#ifdef DS4_FEATURE_XINPUT
+/* ---- XUSB OUT -> DS4 0x05 glue ---------------------------------------
+ *
+ * Both run in the XUSB OUT completion ISR (via usb_xinput_set_output_cbs).
+ * They build one DS4-style output payload and hand it to output_callback,
+ * which is main's on_usb_output(): it only posts to the BT output queue with
+ * xQueueSendToBackFromISR. No logging, no allocation, no blocking calls.
+ *
+ * Byte offsets are the DS4 0x05 buffer including the report id at [0]
+ * (docs/phase2-gamepad-spec.md section 7):
+ *   msg[1]    flags (0x01 rumble, 0x02 lightbar)
+ *   msg[4]    small/high-frequency motor  <- XUSB weak
+ *   msg[5]    large/low-frequency motor   <- XUSB strong
+ *   msg[6..8] lightbar R/G/B
+ * In payload terms (report id stripped) that is payload[3]=weak,
+ * payload[4]=strong, payload[5..7]=RGB.
+ */
+static void xinput_rumble_glue(uint8_t strong, uint8_t weak)
+{
+    uint8_t msg[DS4_USB_OUTPUT_PAYLOAD_LEN + 1] = {0};
+
+    if (!output_callback)
+        return;
+
+    msg[0] = DS4_USB_OUTPUT_REPORT_ID;
+    msg[1] = 0x01;   /* flags: rumble enable */
+    msg[4] = weak;   /* DS4 small motor: XUSB weak byte */
+    msg[5] = strong; /* DS4 large motor: XUSB strong byte */
+    output_callback(msg, (uint16_t)sizeof(msg));
+}
+
+static void xinput_led_glue(uint8_t cmd)
+{
+    uint8_t msg[DS4_USB_OUTPUT_PAYLOAD_LEN + 1] = {0};
+    uint8_t r;
+    uint8_t g;
+    uint8_t b;
+
+    if (!output_callback)
+        return;
+
+    /* 0x06..0x09 = player 1..4; every other command is ignored. */
+    switch (cmd) {
+    case 0x06: r = 0;   g = 0;   b = 255; break; /* P1 blue    */
+    case 0x07: r = 255; g = 0;   b = 0;   break; /* P2 red     */
+    case 0x08: r = 0;   g = 255; b = 0;   break; /* P3 green   */
+    case 0x09: r = 255; g = 0;   b = 255; break; /* P4 magenta */
+    default:
+        return;
+    }
+
+    msg[0] = DS4_USB_OUTPUT_REPORT_ID;
+    msg[1] = 0x02;   /* flags: lightbar enable */
+    msg[6] = r;
+    msg[7] = g;
+    msg[8] = b;
+    output_callback(msg, (uint16_t)sizeof(msg));
+}
+#endif /* DS4_FEATURE_XINPUT */
+
 int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
 {
     output_callback = output_cb;
+#ifdef DS4_FEATURE_XINPUT
+    /* The OUT ISR may fire as soon as the interface is registered below, so
+     * the glue must be installed first. */
+    usb_xinput_set_output_cbs(xinput_rumble_glue, xinput_led_glue);
+#endif
     memset(usb_in_buf, 0, sizeof(usb_in_buf));
 
     LOG_INF("[USB-INIT] === USB Initialization Start ===\n");

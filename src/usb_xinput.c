@@ -1,5 +1,5 @@
 /*
- * XUSB (Xbox 360 wired controller) persona — Phase 0 minimal sample.
+ * XUSB (Xbox 360 wired controller) persona.
  *
  * What this file owns:
  *   - the USB device/configuration/string descriptors for VID 045E /
@@ -8,13 +8,14 @@
  *   - the vendor-specific interface FF/5D/01 on interface 0, including the
  *     17-byte inline class descriptor (type 0x21) that XUSB requires;
  *   - the 0xC1/0x01/0x0100/wIndex=0/20-byte handshake;
- *   - the 20-byte interrupt IN report (continuous 250 Hz stream, fixed
- *     "A pressed" content in Phase 0);
+ *   - the 20-byte interrupt IN report stream: the content is produced by
+ *     src/xinput_map.c (Lane A) and published via usb_xinput_send_report();
  *   - the interrupt OUT endpoint: armed after SET_CONFIGURATION and
  *     re-armed after every completion, parsing 8-byte rumble and 3-byte
- *     LED commands (counters only in Phase 0).
+ *     LED commands and forwarding them to the registered callbacks.
  *
- * Not here yet (Phase 1/2): audio interfaces, DS4 state-block mapping.
+ * Not here: DS4 state-block parsing/mapping and the 4 ms cadence (main.c
+ * calls the mapper, then this module). Audio is Phase 1.
  *
  * Concurrency: the endpoint callbacks run in USB interrupt context. They
  * only copy fixed-size buffers under bflb_irq_save() and bump counters;
@@ -178,20 +179,11 @@ volatile uint8_t g_xinput_last_rumble_strong;
 volatile uint8_t g_xinput_last_rumble_weak;
 volatile uint8_t g_xinput_last_led_cmd;
 
-/* Fixed Phase 0 report: bytes 0-1 are the constant 0x00 0x14 header, the
- * 16-bit little-endian button word follows (bit 12 = A), then LT, RT,
- * LX, LY, RX, RY. Centred sticks are 0x0000 in XInput's signed range. */
-static void xinput_build_fixed_report(uint8_t r[USB_XINPUT_REPORT_LEN],
-                                      bool a_pressed)
-{
-    memset(r, 0, USB_XINPUT_REPORT_LEN);
-    r[0] = 0x00;
-    r[1] = 0x14;
-    if (a_pressed) {
-        r[2] = (uint8_t)(USB_XINPUT_BTN_A & 0xFF);
-        r[3] = (uint8_t)(USB_XINPUT_BTN_A >> 8);
-    }
-}
+/* OUT consumers (usb_gamepad.c glue). Written once at init from task context,
+ * read from the OUT completion ISR; the pointer-sized store is atomic on this
+ * target and both are only set before the bus is configured. */
+static usb_xinput_rumble_cb_t xinput_rumble_cb = NULL;
+static usb_xinput_led_cb_t    xinput_led_cb = NULL;
 
 /* ------------------------------------------------------------------ */
 /* Endpoint plumbing                                                  */
@@ -271,11 +263,18 @@ static void xinput_ep_out_handler(uint8_t busid, uint8_t ep, uint32_t nbytes)
         g_xinput_last_rumble_strong = xinput_out_buf[3];
         g_xinput_last_rumble_weak   = xinput_out_buf[4];
         g_xinput_rumble_cnt++;
+        if (xinput_rumble_cb) {
+            xinput_rumble_cb(g_xinput_last_rumble_strong,
+                             g_xinput_last_rumble_weak);
+        }
     } else if (nbytes >= USB_XINPUT_LED_LEN &&
                xinput_out_buf[0] == 0x01 && xinput_out_buf[1] == 0x03) {
         /* 01 03 <cmd>, 0x06-0x09 = player 1-4 */
         g_xinput_last_led_cmd = xinput_out_buf[2];
         g_xinput_led_cnt++;
+        if (xinput_led_cb) {
+            xinput_led_cb(g_xinput_last_led_cmd);
+        }
     }
 
     xinput_arm_out();
@@ -330,17 +329,13 @@ static int xinput_class_interface_handler(uint8_t busid,
 
 void usb_xinput_register(uint8_t busid)
 {
-    uint8_t fixed[USB_XINPUT_REPORT_LEN];
-
     xinput_configured = false;
     in_busy = false;
     out_armed = false;
+    /* No preset snapshot: the mapper publishes the first report, and a
+     * pending one from a previous session must not leak across a re-init. */
+    pending_valid = false;
     memset(xinput_out_buf, 0, sizeof(xinput_out_buf));
-
-    /* Phase 0 default snapshot: A pressed. */
-    xinput_build_fixed_report(fixed, true);
-    memcpy((void *)pending_report, fixed, sizeof(fixed));
-    pending_valid = true;
 
     xinput_intf.class_interface_handler = xinput_class_interface_handler;
     xinput_intf.class_endpoint_handler  = NULL;
@@ -414,10 +409,9 @@ int usb_xinput_send_report(const uint8_t report[USB_XINPUT_REPORT_LEN])
     return 0;
 }
 
-void usb_xinput_fixed_a(bool pressed)
+void usb_xinput_set_output_cbs(usb_xinput_rumble_cb_t r,
+                               usb_xinput_led_cb_t l)
 {
-    uint8_t r[USB_XINPUT_REPORT_LEN];
-
-    xinput_build_fixed_report(r, pressed);
-    (void)usb_xinput_send_report(r);
+    xinput_rumble_cb = r;
+    xinput_led_cb = l;
 }

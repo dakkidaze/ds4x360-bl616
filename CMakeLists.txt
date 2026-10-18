@@ -72,7 +72,10 @@ if(DS4_XINPUT_ENABLED)
     add_compile_definitions(DS4_FEATURE_XINPUT=1 DS4_NO_GAMEPAD=1)
     target_compile_definitions(app PRIVATE
         DS4_FEATURE_XINPUT=1 DS4_NO_GAMEPAD=1)
-    target_sources(app PRIVATE src/usb_xinput.c)
+    target_sources(app PRIVATE
+        src/usb_xinput.c
+        src/xinput_map.c
+    )
     message(STATUS "Feature XINPUT: enabled (XUSB 045E:028E, DS4 HID persona off)")
 else()
     if("$ENV{GAMEPAD}" STREQUAL "0")

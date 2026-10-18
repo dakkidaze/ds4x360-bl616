@@ -5,8 +5,9 @@
 #include <stdbool.h>
 
 /*
- * Phase 0: minimal XUSB persona for the wireless Xbox 360 controller
- * (wired pad identity).
+ * XUSB persona for the wireless Xbox 360 controller (wired pad identity).
+ * Phase 2: the 20-byte input report is produced by src/xinput_map.c from the
+ * DS4 state block; this module only frames it and drives the OUT callbacks.
  *
  * Windows binds xusb22.sys through the hardware ID USB\VID_045E&PID_028E;
  * xusb22.inf contains that entry, so no MS OS 1.0 compatible-ID chain
@@ -52,7 +53,15 @@
 #define USB_XINPUT_RUMBLE_LEN 8
 #define USB_XINPUT_LED_LEN 3
 
-/* Fixed Phase 0 report: header + A pressed, sticks centred, triggers idle. */
+/* Output callbacks. Both run in USB interrupt context (OUT completion):
+ * they must be ISR-safe — no logging, no allocation, no blocking calls. */
+typedef void (*usb_xinput_rumble_cb_t)(uint8_t strong, uint8_t weak);
+typedef void (*usb_xinput_led_cb_t)(uint8_t cmd);
+
+/* XUSB button-word bit 12 (A). The report content is built in
+ * src/xinput_map.c (XINPUT_BTN_A); this constant keeps the wired-pad A bit
+ * declared here for the report-layout self-check
+ * (tools/xinput_desc_check.py). */
 #define USB_XINPUT_BTN_A 0x1000u
 
 /* Descriptor accessors for usb_gamepad.c's advance-descriptor callbacks. */
@@ -67,7 +76,7 @@ const char *usb_xinput_string_desc(uint8_t index);
 void usb_xinput_register(uint8_t busid);
 
 /* Bus state hooks, called from usb_gamepad.c's usbd_event_handler. */
-void usb_xinput_configured(void); /* arms OUT and the first IN report */
+void usb_xinput_configured(void); /* arms OUT; IN follows the mapper snapshot */
 void usb_xinput_reset(void);
 void usb_xinput_suspend(void);
 
@@ -75,12 +84,15 @@ void usb_xinput_suspend(void);
 void usb_xinput_tick(void);
 
 /* Publish a complete 20-byte snapshot; the pending IN transfer is re-armed
- * as soon as the endpoint is idle. Phase 2 will drive this from the DS4
- * state block; Phase 0 keeps sending the fixed report. */
+ * as soon as the endpoint is idle. The mapper (src/xinput_map.c) owns the
+ * content and calls this once per 4 ms tick. */
 int usb_xinput_send_report(const uint8_t report[USB_XINPUT_REPORT_LEN]);
 
-/* Phase 0 diagnostic helper: A pressed (default) or released. */
-void usb_xinput_fixed_a(bool pressed);
+/* Register the XUSB OUT consumers. Passing NULL for either clears it.
+ * Called once from usb_gamepad_init(); the callbacks are invoked from the
+ * OUT completion ISR. */
+void usb_xinput_set_output_cbs(usb_xinput_rumble_cb_t r,
+                               usb_xinput_led_cb_t l);
 
 /* Diagnostics. Written in ISR context, read from task context. */
 extern volatile uint32_t g_xinput_in_sent;

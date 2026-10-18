@@ -23,6 +23,10 @@
 #include "ds4_output.h"
 #include "ds4_audio.h"
 #include "usb_gamepad.h"
+#ifdef DS4_FEATURE_XINPUT
+#include "usb_xinput.h"
+#include "xinput_map.h"
+#endif
 #include "spk_recovery_policy.h"
 #include "led_status.h"
 #include "config.h"
@@ -228,12 +232,17 @@ static void on_hid_state(enum bt_hid_host_state state)
             battery_low = false;
             cached_battery_level = 0xFF;
             cached_battery_state = 0;
-            /* Neutral USB report so the host doesn't freeze on stale state */
+            /* Neutral USB report so the host doesn't freeze on stale state.
+             * The XUSB persona has no fixed-report path any more: the mapper
+             * emits the neutral 20-byte frame on its next 4 ms tick because
+             * ds4_connected is already false. */
+#ifndef DS4_FEATURE_XINPUT
             uint8_t neutral[DS4_USB_INPUT_PAYLOAD_LEN] = {0};
             neutral[0] = 0x80; neutral[1] = 0x80;
             neutral[2] = 0x80; neutral[3] = 0x80;
             neutral[DS4_PAYLOAD_HAT] = DS4_HAT_NEUTRAL;
             usb_gamepad_send_raw_input(neutral);
+#endif
         }
         usb_fwd_count = 0;
         if (was_connected) {
@@ -813,8 +822,9 @@ static void usb_task(void *arg)
     usb_gamepad_init(on_usb_output);
 
 #ifdef DS4_FEATURE_XINPUT
-    /* Phase 0 XUSB sample: enumerate immediately so a bare Windows host can
-     * bind xusb22 and exercise the fixed report without a BT controller.
+    /* XUSB persona: enumerate immediately so a bare Windows host can bind
+     * xusb22 without a BT controller. The mapper keeps publishing neutral
+     * frames until a controller connects.
      * (The DS4 persona deliberately hides USB until a controller connects;
      * that product behaviour is unchanged in non-XINPUT builds.) */
     usb_phy_request(USB_PHY_REQ_CONNECT, USB_PHY_OWNER_MAIN);
@@ -833,6 +843,23 @@ static void usb_task(void *arg)
 #endif
 
     uint8_t raw_report[DS4_BT_INPUT_PAYLOAD_SIZE];
+#ifdef DS4_FEATURE_XINPUT
+    /* XUSB input path: the mapper (Lane A) owns the 20-byte report. The
+     * snapshot starts neutral — sticks at 128, hat neutral — NOT zero, or
+     * the first frames before any BT report would decode as full up/left
+     * deflection with both triggers idle. */
+    static xinput_map_t xmap;
+    uint8_t xinput_latest[DS4_BT_INPUT_PAYLOAD_SIZE] = {
+        [DS4_PAYLOAD_STICK_LX] = 128,
+        [DS4_PAYLOAD_STICK_LY] = 128,
+        [DS4_PAYLOAD_STICK_RX] = 128,
+        [DS4_PAYLOAD_STICK_RY] = 128,
+        [DS4_PAYLOAD_HAT]      = DS4_HAT_NEUTRAL,
+    };
+    uint8_t xreport[USB_XINPUT_REPORT_LEN];
+
+    xinput_map_init(&xmap);
+#endif
     uint64_t last_activity_us = bflb_mtimer_get_time_us();
     uint64_t last_input_us    = bflb_mtimer_get_time_us();
     bool inactive_disconnected = false;
@@ -857,10 +884,21 @@ static void usb_task(void *arg)
             usb_fwd_count = 0;
         }
 
+        /* 4 ms cadence under XINPUT: keeps the turbo phase and the stick
+         * refresh running even when no BT report arrives (the mapper emits a
+         * neutral frame while ds4_connected is false). */
+#ifdef DS4_FEATURE_XINPUT
+        TickType_t wait = pdMS_TO_TICKS(4);
+#else
         TickType_t wait = pdMS_TO_TICKS(10);
+#endif
         if (xQueueReceive(input_queue, raw_report, wait) == pdTRUE) {
             last_input_us = bflb_mtimer_get_time_us();
             usb_fwd_count++;
+#ifdef DS4_FEATURE_XINPUT
+            /* Snapshot for the mapper tick at the end of this iteration. */
+            memcpy(xinput_latest, raw_report, DS4_BT_INPUT_PAYLOAD_SIZE);
+#endif
             if (usb_fwd_count == 1)
                 LOG_DBG("[USB-FWD] First BT→USB input forwarded\n");
             else if ((usb_fwd_count % 5000) == 0)
@@ -918,8 +956,9 @@ static void usb_task(void *arg)
                         inactive_disconnected = true;
                     }
                 }
-
+#ifndef DS4_FEATURE_XINPUT
                 usb_gamepad_send_raw_input(raw_report);
+#endif
             }
         }
 
@@ -927,6 +966,18 @@ static void usb_task(void *arg)
             last_activity_us = bflb_mtimer_get_time_us();
             inactive_disconnected = false;
         }
+#ifdef DS4_FEATURE_XINPUT
+        /* One mapper tick per loop pass, including queue timeouts: send the
+         * newest snapshot as a 20-byte XUSB report. */
+        {
+            uint32_t now_ms =
+                (uint32_t)(bflb_mtimer_get_time_us() / 1000ULL);
+
+            xinput_map_set_state(&xmap, xinput_latest, ds4_connected);
+            xinput_map_tick(&xmap, now_ms, xreport);
+            (void)usb_xinput_send_report(xreport);
+        }
+#endif
     }
 }
 
