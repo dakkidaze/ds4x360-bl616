@@ -1,0 +1,41 @@
+# ---- build outputs ----
+build/
+firmware/
+_stale/
+*.o
+*.a
+*.elf
+*.map
+*.bin
+*.ota
+*.xz.ota
+*.tar.gz
+*.zip
+*.i
+*.d
+*.su
+*.gcda
+*.gcno
+
+# ---- host tools' compiled binaries (sources stay tracked) ----
+tools/desc_test_cdc
+tools/ep0_boundary_test
+tools/getdesc
+tools/hidlog
+tools/fw_desc.txt
+
+# ---- logs and capture dumps ----
+*.log
+fw*.txt
+usbmon*.txt
+um*.txt
+
+# ---- python ----
+__pycache__/
+*.pyc
+
+# ---- editors / OS ----
+.DS_Store
+*.code-workspace
+*.swp
+*~
