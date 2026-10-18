@@ -75,9 +75,22 @@
 #define INPUT_QUEUE_ITEM_SZ  DS4_BT_INPUT_PAYLOAD_SIZE      /* 63 */
 #define USB_OUTPUT_BUF_SZ    (DS4_USB_OUTPUT_PAYLOAD_LEN + 1) /* 32 */
 
+/* One queued USB output report plus the controller session it was produced
+ * for. bt_task drops items whose generation no longer matches, so a rumble or
+ * LED command queued for one controller is never applied to its replacement. */
+typedef struct {
+    uint8_t  data[USB_OUTPUT_BUF_SZ];
+    uint32_t gen;
+} usb_out_msg_t;
+
 static QueueHandle_t input_queue;
 static QueueHandle_t output_queue;
 static volatile bool ds4_connected = false;
+/* Incremented on every ds4_connected edge (connect and disconnect). Labels
+ * the input snapshot and every queued USB output item with the controller
+ * session they belong to, so nothing from a previous controller can be
+ * reported or applied after a reconnect. */
+static volatile uint32_t ds4_session_gen = 0;
 static volatile bool ever_connected = false;
 static volatile bool battery_low = false;
 static volatile bool bt_init_done = false;
@@ -228,6 +241,10 @@ static void on_hid_state(enum bt_hid_host_state state)
 #endif
         bool was_connected = ds4_connected;
         if (ds4_connected) {
+            /* New session starts here: bump before clearing the flag so no
+             * producer can tag input/output with the old generation while
+             * still observing "connected". */
+            ds4_session_gen++;
             ds4_connected = false;
             battery_low = false;
             cached_battery_level = 0xFF;
@@ -313,6 +330,11 @@ static void on_hid_state(enum bt_hid_host_state state)
             usb_phy_request(USB_PHY_REQ_CONNECT, USB_PHY_OWNER_MAIN);
         }
 
+        /* Connected edge: publish the generation before the flag so every
+         * consumer of ds4_connected==true already sees the new session. */
+        if (!ds4_connected) {
+            ds4_session_gen++;
+        }
         ds4_connected = true;
         ever_connected = true;
         battery_low = false;
@@ -342,18 +364,18 @@ static void on_usb_output(const uint8_t *data, uint16_t len)
     if (data[0] != DS4_USB_OUTPUT_REPORT_ID)
         return;
 
-    uint8_t msg[USB_OUTPUT_BUF_SZ];
+    usb_out_msg_t msg;
     uint16_t copy = (len <= USB_OUTPUT_BUF_SZ) ? len : USB_OUTPUT_BUF_SZ;
-    memcpy(msg, data, copy);
-    if (copy < USB_OUTPUT_BUF_SZ)
-        memset(msg + copy, 0, USB_OUTPUT_BUF_SZ - copy);
+    memset(&msg, 0, sizeof(msg));
+    memcpy(msg.data, data, copy);
+    msg.gen = ds4_session_gen;
     if (xQueueIsQueueFullFromISR(output_queue)) {
-        uint8_t dummy[USB_OUTPUT_BUF_SZ];
-        xQueueReceiveFromISR(output_queue, dummy, NULL);
+        usb_out_msg_t dummy;
+        xQueueReceiveFromISR(output_queue, &dummy, NULL);
         out_drop_count++;
     }
     out_isr_ts_us = bflb_mtimer_get_time_us();
-    xQueueSendToBackFromISR(output_queue, msg, NULL);
+    xQueueSendToBackFromISR(output_queue, &msg, NULL);
 }
 
 /* ---- FreeRTOS tasks ---- */
@@ -432,7 +454,7 @@ static void bt_task(void *arg)
     }
     LOG_INF("[BT_TASK] Entering main loop\n");
 
-    uint8_t usb_out[USB_OUTPUT_BUF_SZ];
+    usb_out_msg_t usb_out;
     uint16_t idle_ticks = 0;
     uint16_t loop_count = 0;
     uint64_t disconnecting_since = 0;
@@ -710,16 +732,20 @@ static void bt_task(void *arg)
         if (ds4_connected) {
             /* Output forwarding: USB report 0x05 → BT report 0x11.
              * Each USB output frame is independently forwarded (a real
-             * DS4 output report carries the complete state every time). */
-            if (xQueueReceive(output_queue, usb_out, pdMS_TO_TICKS(24)) == pdTRUE) {
-                uint8_t payload[DS4_USB_OUTPUT_PAYLOAD_LEN] = {0};
-                /* usb_out[0] = report id 0x05; payload follows */
-                uint16_t plen = USB_OUTPUT_BUF_SZ - 1;
-                memcpy(payload, usb_out + 1, plen);
-                if (config_lock_volume()) {
-                    payload[0] &= 0x0F;  /* strip volume-enable flag bits */
+             * DS4 output report carries the complete state every time).
+             * Items tagged with another session are dropped: they were
+             * queued for a controller that is no longer connected. */
+            if (xQueueReceive(output_queue, &usb_out, pdMS_TO_TICKS(24)) == pdTRUE) {
+                if (usb_out.gen == ds4_session_gen) {
+                    uint8_t payload[DS4_USB_OUTPUT_PAYLOAD_LEN] = {0};
+                    /* data[0] = report id 0x05; payload follows */
+                    uint16_t plen = USB_OUTPUT_BUF_SZ - 1;
+                    memcpy(payload, usb_out.data + 1, plen);
+                    if (config_lock_volume()) {
+                        payload[0] &= 0x0F;  /* strip volume-enable flag bits */
+                    }
+                    ds4_send_output_payload(payload, plen);
                 }
-                ds4_send_output_payload(payload, plen);
             }
             idle_ticks = 0;
         } else {
@@ -844,18 +870,11 @@ static void usb_task(void *arg)
 
     uint8_t raw_report[DS4_BT_INPUT_PAYLOAD_SIZE];
 #ifdef DS4_FEATURE_XINPUT
-    /* XUSB input path: the mapper (Lane A) owns the 20-byte report. The
-     * snapshot starts neutral — sticks at 128, hat neutral — NOT zero, or
-     * the first frames before any BT report would decode as full up/left
-     * deflection with both triggers idle. */
+    /* XUSB input path: the mapper (Lane A) owns the 20-byte report and is
+     * fed the raw state block straight from the queue. It starts with no
+     * state for any session, so the first frames are neutral until a report
+     * for the current generation arrives. */
     static xinput_map_t xmap;
-    uint8_t xinput_latest[DS4_BT_INPUT_PAYLOAD_SIZE] = {
-        [DS4_PAYLOAD_STICK_LX] = 128,
-        [DS4_PAYLOAD_STICK_LY] = 128,
-        [DS4_PAYLOAD_STICK_RX] = 128,
-        [DS4_PAYLOAD_STICK_RY] = 128,
-        [DS4_PAYLOAD_HAT]      = DS4_HAT_NEUTRAL,
-    };
     uint8_t xreport[USB_XINPUT_REPORT_LEN];
 
     xinput_map_init(&xmap);
@@ -896,8 +915,9 @@ static void usb_task(void *arg)
             last_input_us = bflb_mtimer_get_time_us();
             usb_fwd_count++;
 #ifdef DS4_FEATURE_XINPUT
-            /* Snapshot for the mapper tick at the end of this iteration. */
-            memcpy(xinput_latest, raw_report, DS4_BT_INPUT_PAYLOAD_SIZE);
+            /* Hand the raw block to the mapper; the tick at the end of this
+             * pass reports it (or neutral if the session just changed). */
+            xinput_map_set_state(&xmap, raw_report);
 #endif
             if (usb_fwd_count == 1)
                 LOG_DBG("[USB-FWD] First BT→USB input forwarded\n");
@@ -967,13 +987,14 @@ static void usb_task(void *arg)
             inactive_disconnected = false;
         }
 #ifdef DS4_FEATURE_XINPUT
-        /* One mapper tick per loop pass, including queue timeouts: send the
-         * newest snapshot as a 20-byte XUSB report. */
+        /* One mapper tick per loop pass, including queue timeouts: publish
+         * the connection state + session generation first, so a reconnect
+         * can never turn the previous controller's last input into a frame. */
         {
             uint32_t now_ms =
                 (uint32_t)(bflb_mtimer_get_time_us() / 1000ULL);
 
-            xinput_map_set_state(&xmap, xinput_latest, ds4_connected);
+            xinput_map_set_connected(&xmap, ds4_connected, ds4_session_gen);
             xinput_map_tick(&xmap, now_ms, xreport);
             (void)usb_xinput_send_report(xreport);
         }
@@ -1257,7 +1278,7 @@ int main(void)
     /* Depth-1: BT callback always delivers the latest report to usb_task.
      * The 10-deep app_tx_fifo in bt_hid_host.c provides the BT output
      * flow control (one BT packet in-flight at a time). */
-    output_queue = xQueueCreate(5, USB_OUTPUT_BUF_SZ);
+    output_queue = xQueueCreate(5, sizeof(usb_out_msg_t));
     if (!input_queue || !output_queue) {
         LOG_ERR("[B] queue alloc FAIL\n");
         while (1) {}

@@ -180,21 +180,37 @@ void xinput_map_init(xinput_map_t *m)
     m->state[DS4_PAYLOAD_STICK_RY] = 128;
     m->state[DS4_PAYLOAD_HAT] = DS4_HAT_NEUTRAL;
     m->connected = false;
+    m->have_state = false;
+    m->gen = 0;
     xinput_turbo_init(&m->turbo);
 }
 
-void xinput_map_set_state(xinput_map_t *m,
-                          const uint8_t state[DS4_BT_INPUT_PAYLOAD_SIZE],
-                          bool connected)
+void xinput_map_set_connected(xinput_map_t *m, bool connected, uint32_t gen)
 {
     if (!m) {
         return;
     }
 
-    if (state) {
-        memcpy(m->state, state, DS4_BT_INPUT_PAYLOAD_SIZE);
+    if (gen != m->gen) {
+        /* New controller session: nothing from the previous one may leak into
+         * the report or resume an armed turbo window. The first frames stay
+         * neutral until xinput_map_set_state() delivers a block. */
+        xinput_turbo_init(&m->turbo);
+        m->have_state = false;
+        m->gen = gen;
     }
     m->connected = connected;
+}
+
+void xinput_map_set_state(xinput_map_t *m,
+                          const uint8_t state[DS4_BT_INPUT_PAYLOAD_SIZE])
+{
+    if (!m || !state) {
+        return;
+    }
+
+    memcpy(m->state, state, DS4_BT_INPUT_PAYLOAD_SIZE);
+    m->have_state = true;
 }
 
 void xinput_map_tick(xinput_map_t *m, uint32_t now_ms,
@@ -214,7 +230,7 @@ void xinput_map_tick(xinput_map_t *m, uint32_t now_ms,
     memset(&out[XINPUT_OFF_ZERO], 0,
            (size_t)(XINPUT_REPORT_LEN - XINPUT_OFF_ZERO));
 
-    if (!m->connected) {
+    if (!m->connected || !m->have_state) {
         /* Neutral frame: header only, timers cleared so a reconnect cannot
          * resume a pulse window from before the disconnect. */
         memset(&out[XINPUT_OFF_BUTTONS], 0,

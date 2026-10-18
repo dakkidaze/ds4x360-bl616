@@ -323,6 +323,31 @@ static int xinput_class_interface_handler(uint8_t busid,
     return -1;
 }
 
+/* SET_INTERFACE(0, 0): the core cancels and reopens both endpoints before it
+ * notifies the class, but that does not clear the software busy guards
+ * (in_busy / out_armed). Releasing them here and re-arming is what keeps the
+ * IN stream and the OUT read alive across a host interface switch; without it
+ * both endpoints stay "busy" forever and the report stream dies.
+ * ISR context: flags and endpoint submits only, no logging. */
+static void xinput_notify_handler(uint8_t busid, uint8_t event, void *arg)
+{
+    const struct usb_interface_descriptor *intf = arg;
+
+    (void)busid;
+
+    if (event != USBD_EVENT_SET_INTERFACE || intf == NULL) {
+        return;
+    }
+    if (intf->bInterfaceNumber != 0) {
+        return;
+    }
+
+    in_busy = false;
+    out_armed = false;
+    xinput_arm_out();
+    xinput_try_send_in();
+}
+
 /* ------------------------------------------------------------------ */
 /* Public API                                                         */
 /* ------------------------------------------------------------------ */
@@ -340,7 +365,7 @@ void usb_xinput_register(uint8_t busid)
     xinput_intf.class_interface_handler = xinput_class_interface_handler;
     xinput_intf.class_endpoint_handler  = NULL;
     xinput_intf.vendor_handler          = xinput_vendor_handler;
-    xinput_intf.notify_handler          = NULL;
+    xinput_intf.notify_handler          = xinput_notify_handler;
     xinput_intf.hid_report_descriptor   = NULL;
     xinput_intf.hid_report_descriptor_len = 0;
     /* Registered first: usbd_add_interface() assigns intf_num in order, so

@@ -61,22 +61,35 @@ static int16_t out_s16(const uint8_t *p)
     return (int16_t)(uint16_t)(p[0] | ((uint16_t)p[1] << 8));
 }
 
+/* Session generation used by the single-frame helpers. A fresh map starts at
+ * gen 0, so this is the same session and never invalidates the pushed block. */
+#define TEST_GEN 0u
+
 /* One frame from a fresh map (no cross-frame turbo state). */
 static void one_shot(const uint8_t s[], uint8_t out[XINPUT_REPORT_LEN])
 {
     xinput_map_t m;
 
     xinput_map_init(&m);
-    xinput_map_set_state(&m, s, true);
+    xinput_map_set_connected(&m, true, TEST_GEN);
+    xinput_map_set_state(&m, s);
     xinput_map_tick(&m, 0, out);
+}
+
+/* One frame from a persistent map in an explicit session generation. */
+static void frame_gen(xinput_map_t *m, const uint8_t s[], uint32_t now,
+                      uint8_t out[XINPUT_REPORT_LEN], uint32_t gen)
+{
+    xinput_map_set_connected(m, true, gen);
+    xinput_map_set_state(m, s);
+    xinput_map_tick(m, now, out);
 }
 
 /* One frame from a persistent map, for timing sequences. */
 static void frame(xinput_map_t *m, const uint8_t s[], uint32_t now,
                   uint8_t out[XINPUT_REPORT_LEN])
 {
-    xinput_map_set_state(m, s, true);
-    xinput_map_tick(m, now, out);
+    frame_gen(m, s, now, out, TEST_GEN);
 }
 
 static bool near_i32(int v, int want, int tol)
@@ -605,7 +618,7 @@ static void group8_disconnected(void)
     frame(&m, s, 0, out);
     CHECK(out_buttons(out) != 0);
 
-    xinput_map_set_state(&m, s, false);
+    xinput_map_set_connected(&m, false, 1);
     xinput_map_tick(&m, 10, out);
     CHECK(out[0] == 0x00);
     CHECK(out[1] == 0x14);
@@ -624,17 +637,99 @@ static void group8_disconnected(void)
     frame(&m, s, 500, out);            /* 15*33 = odd: turbo off */
     CHECK(out_buttons(out) == 0);
 
-    xinput_map_set_state(&m, s, false);
+    xinput_map_set_connected(&m, false, 2);
     xinput_map_tick(&m, 501, out);
     CHECK(out_buttons(out) == 0);
 
-    frame(&m, s, 825, out);            /* 25*33 = odd phase */
+    /* Reconnect in a new generation: neutral until a new block arrives,
+     * then the held buttons are a plain press again even in an off phase. */
+    frame_gen(&m, s, 825, out, 3);     /* 25*33 = odd phase */
     CHECK(out_buttons(out) == XINPUT_BTN_A);
 
     /* Tail is always zero on a live frame too. */
     for (int i = 14; i < XINPUT_REPORT_LEN; i++) {
         CHECK(out[i] == 0);
     }
+}
+
+/* ---- group 9: session generation -------------------------------------- */
+
+static void group9_session_gen(void)
+{
+    xinput_map_t m;
+    uint8_t a[DS4_BT_INPUT_PAYLOAD_SIZE];
+    uint8_t b[DS4_BT_INPUT_PAYLOAD_SIZE];
+    uint8_t out[XINPUT_REPORT_LEN];
+
+    neutral_state(a);
+    a[4] = DS4_HAT_NEUTRAL | 0x20u;    /* Cross */
+    neutral_state(b);
+    b[4] = DS4_HAT_NEUTRAL | 0x40u;    /* Circle */
+
+    /* A block for the current session is reported immediately. */
+    xinput_map_init(&m);
+    xinput_map_set_connected(&m, true, 1);
+    xinput_map_set_state(&m, a);
+    xinput_map_tick(&m, 0, out);
+    CHECK(out_buttons(out) == XINPUT_BTN_A);
+
+    /* Disconnect (new generation): neutral frame even though a block for the
+     * old session is still stored. */
+    xinput_map_set_connected(&m, false, 2);
+    xinput_map_tick(&m, 4, out);
+    CHECK(out[0] == 0x00);
+    CHECK(out[1] == 0x14);
+    for (int i = 2; i < XINPUT_REPORT_LEN; i++) {
+        CHECK(out[i] == 0);
+    }
+
+    /* Reconnect (new generation): still neutral, the previous controller's
+     * last input must not leak into the new session. */
+    xinput_map_set_connected(&m, true, 3);
+    xinput_map_tick(&m, 8, out);
+    CHECK(out_buttons(out) == 0);
+    CHECK(out_s16(&out[6]) == 0);
+    CHECK(out_s16(&out[8]) == 0);
+    CHECK(out_s16(&out[10]) == 0);
+    CHECK(out_s16(&out[12]) == 0);
+    CHECK(out[4] == 0);
+    CHECK(out[5] == 0);
+
+    /* A block for the new session resumes output. */
+    xinput_map_set_state(&m, b);
+    xinput_map_tick(&m, 12, out);
+    CHECK(out_buttons(out) == XINPUT_BTN_B);
+
+    /* Repeating the same generation is not a new session: the block stays
+     * eligible. */
+    xinput_map_set_connected(&m, true, 3);
+    xinput_map_tick(&m, 14, out);
+    CHECK(out_buttons(out) == XINPUT_BTN_B);
+
+    /* A generation change while still connected also invalidates the block. */
+    xinput_map_set_connected(&m, true, 4);
+    xinput_map_tick(&m, 16, out);
+    CHECK(out_buttons(out) == 0);
+
+    /* And it resets an already armed turbo window. */
+    xinput_map_init(&m);
+    neutral_state(a);
+    a[4] = DS4_HAT_NEUTRAL | 0x20u;    /* Cross */
+    a[6] = 0x02u;                      /* touchpad modifier */
+    xinput_map_set_connected(&m, true, 10);
+    xinput_map_set_state(&m, a);
+    xinput_map_tick(&m, 0, out);
+    CHECK(out_buttons(out) == XINPUT_BTN_A);
+    xinput_map_tick(&m, 500, out);     /* armed, 15*33 = odd phase */
+    CHECK(out_buttons(out) == 0);
+
+    xinput_map_set_connected(&m, true, 11);   /* session change, connected */
+    xinput_map_tick(&m, 501, out);     /* no block for the new session */
+    CHECK(out_buttons(out) == 0);
+
+    xinput_map_set_state(&m, a);
+    xinput_map_tick(&m, 502, out);     /* odd phase, but not armed yet */
+    CHECK(out_buttons(out) == XINPUT_BTN_A);
 }
 
 /* ---- main ------------------------------------------------------------- */
@@ -676,6 +771,10 @@ int main(void)
     before = g_failures;
     group8_disconnected();
     report("group 8: disconnected neutral frame", before);
+
+    before = g_failures;
+    group9_session_gen();
+    report("group 9: session generation", before);
 
     if (g_failures != 0) {
         printf("FAILED: %d of %d checks\n", g_failures, g_checks);

@@ -47,21 +47,35 @@ typedef struct {
     uint8_t state[DS4_BT_INPUT_PAYLOAD_SIZE];
     /* False while the controller is not connected: report stays neutral. */
     bool connected;
+    /* True once a state block for the current session has been received.
+     * Cleared on every session change (gen mismatch), so a reconnect can
+     * never report the previous controller's last input. */
+    bool have_state;
+    /* Session generation last applied by xinput_map_set_connected(). */
+    uint32_t gen;
     /* Touchpad-modifier turbo state (xinput_turbo.h). */
     xinput_turbo_t turbo;
 } xinput_map_t;
 
-/* Start from a neutral state block (sticks 128, hat 8) and disconnected. */
+/* Start from a neutral state block (sticks 128, hat 8), disconnected,
+ * no state for any session, generation 0. */
 void xinput_map_init(xinput_map_t *m);
 
-/* Publish the latest state block. The copy is unconditional; `connected`
- * decides whether xinput_map_tick() reports it or the neutral frame. */
-void xinput_map_set_state(xinput_map_t *m,
-                          const uint8_t state[DS4_BT_INPUT_PAYLOAD_SIZE],
-                          bool connected);
+/* Publish the connection state and the session generation. Whenever `gen`
+ * differs from the last one applied, this is a new controller session: the
+ * turbo timers are reset, the stored state block is invalidated (the first
+ * frames stay neutral) and the generation is adopted. Repeating the same
+ * generation is a no-op apart from the `connected` flag. */
+void xinput_map_set_connected(xinput_map_t *m, bool connected, uint32_t gen);
 
-/* Emit one 20-byte report for now_ms. Disconnected -> 00 14 + 18 zero bytes
- * and the turbo timers are reset. */
+/* Publish the latest state block for the current session. It is only
+ * reported while connected and after the block for this generation has
+ * arrived. */
+void xinput_map_set_state(xinput_map_t *m,
+                          const uint8_t state[DS4_BT_INPUT_PAYLOAD_SIZE]);
+
+/* Emit one 20-byte report for now_ms. Not connected, or no state block yet
+ * for this session -> 00 14 + 18 zero bytes, turbo timers reset. */
 void xinput_map_tick(xinput_map_t *m, uint32_t now_ms,
                      uint8_t out[XINPUT_REPORT_LEN]);
 
