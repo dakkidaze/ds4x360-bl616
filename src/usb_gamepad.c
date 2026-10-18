@@ -23,6 +23,7 @@
 #include "ds4_hid_desc.h"
 #include "ds4_usb_audio.h"
 #include "ds4_usb_audio_desc.h"
+#include "usb_xinput.h"
 #include "config.h"
 #include "usbd_core.h"
 #include "usbd_hid.h"
@@ -157,6 +158,7 @@ static void publish_pending_feature(uint8_t rid)
     bflb_irq_restore(key);
 }
 
+#ifndef DS4_FEATURE_XINPUT
 static uint8_t device_desc[] = {
     0x12,                    /* bLength */
     0x01,                    /* bDescriptorType: Device */
@@ -187,7 +189,9 @@ static uint8_t config_desc[USB_CONFIG_SIZE] = {
      * [HID_INTF_OFF ..]  25 bytes: gamepad intf 3 + HID desc + EP IN
      * all spliced from their arrays in usb_gamepad_init() */
 };
+#endif /* !DS4_FEATURE_XINPUT */
 
+#ifndef DS4_NO_GAMEPAD
 /* Gamepad interface block: Interface 3 + HID descriptor + EP IN
  * (wDescriptorLength patched in init before splicing). */
 static const uint8_t gamepad_desc_block[] = {
@@ -215,20 +219,30 @@ static const uint8_t gamepad_desc_block[] = {
     USB_GAMEPAD_EP_MPS, 0x00,
     USB_GAMEPAD_INTERVAL_MS,
 };
+#endif /* !DS4_NO_GAMEPAD */
 
 /* ---- Advance-mode descriptor callbacks ---- */
 
 static const uint8_t *desc_device_cb(uint8_t speed)
 {
     (void)speed;
+#ifdef DS4_FEATURE_XINPUT
+    /* XUSB persona: VID/PID 045E:028E, no serial number. */
+    return usb_xinput_device_desc();
+#else
     device_desc[16] = config_usb_sn() ? 0x03 : 0x00;
     return device_desc;
+#endif
 }
 
 static const uint8_t *desc_config_cb(uint8_t speed)
 {
     (void)speed;
+#ifdef DS4_FEATURE_XINPUT
+    return usb_xinput_config_desc();
+#else
     return config_desc;
+#endif
 }
 
 static const uint8_t device_qualifier_desc[] = {
@@ -271,6 +285,9 @@ static void serial_str_build(void)
 static const char *desc_string_cb(uint8_t speed, uint8_t index)
 {
     (void)speed;
+#ifdef DS4_FEATURE_XINPUT
+    return usb_xinput_string_desc(index);
+#else
     switch (index) {
     case 0: return "\x09\x04";
     case 1: return "Sony Interactive Entertainment";
@@ -281,6 +298,7 @@ static const char *desc_string_cb(uint8_t speed, uint8_t index)
         return serial_init ? serial_str : "";
     default: return NULL;
     }
+#endif
 }
 
 static const struct usb_descriptor usb_desc = {
@@ -295,9 +313,11 @@ static const struct usb_descriptor usb_desc = {
     .bos_descriptor                      = NULL,
 };
 
-/* Gamepad interface / endpoints */
+/* Gamepad interface / endpoints (DS4 HID persona only) */
+#ifndef DS4_NO_GAMEPAD
 static struct usbd_interface hid_intf;
 static struct usbd_endpoint  hid_ep_in;
+#endif
 
 static volatile bool usb_configured = false;
 static volatile bool ep_in_busy = false;
@@ -371,6 +391,7 @@ static void try_send_pending(void)
     }
 }
 
+#ifndef DS4_NO_GAMEPAD
 ATTR_TCM_SECTION
 static void hid_ep_in_handler(uint8_t busid, uint8_t ep, uint32_t nbytes)
 {
@@ -378,6 +399,7 @@ static void hid_ep_in_handler(uint8_t busid, uint8_t ep, uint32_t nbytes)
     ep_in_busy = false;
     try_send_pending();
 }
+#endif
 
 #ifndef DS4_NO_GAMEPAD
 /* N01: SET_INTERFACE(hid, 0) is legal and HID alt 0 owns the IN endpoint, so
@@ -420,12 +442,21 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
         ep_in_busy = false;
         g_usb_evt_configured++;   /* ISR context: counter, no printf */
         log_event_put(LOG_EVT_USB_STATE, 0, 0);
+#ifdef DS4_FEATURE_XINPUT
+        /* Core has opened both endpoints from the configuration descriptor;
+         * arm the OUT read so rumble/LED stop NAKing, and start the IN
+         * report stream. */
+        usb_xinput_configured();
+#endif
         if (hook_configured)
             hook_configured();
         break;
     case USBD_EVENT_RESET:
         usb_configured = false;
         ep_in_busy = false;
+#ifdef DS4_FEATURE_XINPUT
+        usb_xinput_reset();
+#endif
         /* R08: a bus reset drops host intent too — the host will re-enumerate
          * and re-open the audio interfaces. */
         usb_audio_reset();
@@ -435,6 +466,9 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
     case USBD_EVENT_SUSPEND:
         usb_configured = false;
         ep_in_busy = false;
+#ifdef DS4_FEATURE_XINPUT
+        usb_xinput_suspend();
+#endif
         /* R08: keep the host's alt state, stop endpoint I/O only. */
         usb_audio_suspend();
         g_usb_evt_suspend++;
@@ -445,6 +479,9 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
     case USBD_EVENT_RESUME:
         usb_configured = true;
         ep_in_busy = false;
+#ifdef DS4_FEATURE_XINPUT
+        usb_xinput_configured();
+#endif
         /* R08: restore endpoint I/O for whatever the host still has open. */
         usb_audio_resume();
         g_usb_evt_resume++;
@@ -461,6 +498,11 @@ static void usbd_event_handler(uint8_t busid, uint8_t event)
 ATTR_TCM_SECTION
 void usb_gamepad_process_deferred(void)
 {
+#ifdef DS4_FEATURE_XINPUT
+    /* Task-context retry: if an IN/OUT arm failed in ISR context (endpoint
+     * cancel-pending window, suspend/resume race) it is retried here. */
+    usb_xinput_tick();
+#endif
     if (usb_reset_pending) {
         usb_reset_pending = false;
         config_save();
@@ -521,6 +563,7 @@ int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
 
     LOG_INF("[USB-INIT] === USB Initialization Start ===\n");
 
+#ifndef DS4_FEATURE_XINPUT
     /* Splice the DS4 UAC1 audio descriptor after the config header */
 #if defined(DS4_FEATURE_AUDIO)
     {
@@ -540,15 +583,30 @@ int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
     config_desc[HID_WDLEN_OFF + 1] = (DS4_HID_REPORT_DESC_SIZE >> 8) & 0xFF;
     usb_gamepad_set_polling_rate(config_polling_mode());
 #endif
+#else
+    /* XUSB persona: descriptors are static in usb_xinput.c, nothing to patch. */
+    LOG_INF("[USB-INIT] XUSB persona: VID=%04x PID=%04x bcdDevice=%04x\n",
+            USB_XINPUT_VID, USB_XINPUT_PID, USB_XINPUT_BCD_DEVICE);
+#endif
 
     /* R01: build the serial string once, here, not inside the descriptor
      * callback (EP0 path). Needed for any build that advertises iSerialNumber. */
     serial_str_build();
 
     usbd_desc_register(0, &usb_desc);
+#ifdef DS4_FEATURE_XINPUT
+    LOG_INF("[USB-INIT] Descriptors registered (dev=%uB, cfg=%uB)\n",
+            (unsigned)18, (unsigned)49);
+#else
     LOG_INF("[USB-INIT] Descriptors registered (dev=%uB, cfg=%uB)\n",
            (unsigned)sizeof(device_desc), (unsigned)sizeof(config_desc));
+#endif
 
+#ifdef DS4_FEATURE_XINPUT
+    /* Interface 0: XUSB. Registered before everything else so intf_num is 0
+     * and the 0xC1/0x01 handshake can use wIndex 0. */
+    usb_xinput_register(0);
+#else
     /* Interfaces 0/1/2: DS4 UAC1 audio (must be added before the gamepad —
      * CherryUSB numbers interfaces in registration order) */
 #if defined(DS4_FEATURE_AUDIO)
@@ -573,6 +631,7 @@ int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
     LOG_INF("[USB-INIT] Endpoints: GP_IN=0x%02x (output via EP0)\n",
            USB_GAMEPAD_EP_IN);
 #endif
+#endif /* DS4_FEATURE_XINPUT */
 
 #ifdef DEBUG_CONSOLE
     /* Set up the log ring + console tap (optional HID feature 0xB4 reader;

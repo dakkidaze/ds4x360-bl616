@@ -812,6 +812,14 @@ static void usb_task(void *arg)
 
     usb_gamepad_init(on_usb_output);
 
+#ifdef DS4_FEATURE_XINPUT
+    /* Phase 0 XUSB sample: enumerate immediately so a bare Windows host can
+     * bind xusb22 and exercise the fixed report without a BT controller.
+     * (The DS4 persona deliberately hides USB until a controller connects;
+     * that product behaviour is unchanged in non-XINPUT builds.) */
+    usb_phy_request(USB_PHY_REQ_CONNECT, USB_PHY_OWNER_MAIN);
+    usb_phy_process();
+#else
     /* DS4Dongle production behavior: hide USB at boot. The device
      * enumerates only after a controller connects (CONNECTED state).
      * NOTE: debug builds keep this too — USB-up-from-boot wedges the
@@ -822,6 +830,7 @@ static void usb_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(150));
     usb_phy_request(USB_PHY_REQ_DISCONNECT, USB_PHY_OWNER_MAIN);
     usb_phy_process();
+#endif
 
     uint8_t raw_report[DS4_BT_INPUT_PAYLOAD_SIZE];
     uint64_t last_activity_us = bflb_mtimer_get_time_us();

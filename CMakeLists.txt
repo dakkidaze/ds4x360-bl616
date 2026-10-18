@@ -45,28 +45,62 @@ target_sources(app PRIVATE
 #                (flag only — no behaviour implemented yet)
 #   GYRO=1     : reserve a build that maps gyro to a HID device
 #                (flag only — no behaviour implemented yet)
-if("$ENV{GAMEPAD}" STREQUAL "0")
-    add_compile_definitions(DS4_NO_GAMEPAD=1)
-    target_compile_definitions(app PRIVATE DS4_NO_GAMEPAD=1)
-    message(STATUS "Feature GAMEPAD: disabled")
-else()
-    message(STATUS "Feature GAMEPAD: enabled (default)")
+#   XINPUT=1   : XUSB (Xbox 360 wired pad) persona instead of the DS4 HID
+#                persona. The two personas are mutually exclusive: XINPUT
+#                builds the XUSB descriptors/interface and never registers
+#                the DS4 HID interface. Phase 0 is XUSB-only, so it requires
+#                AUDIO=0; Phase 1 reconnects the UAC1 paths.
+set(DS4_XINPUT_ENABLED FALSE)
+if("$ENV{XINPUT}" STREQUAL "1")
+    set(DS4_XINPUT_ENABLED TRUE)
 endif()
+
+if(DS4_XINPUT_ENABLED)
+    if(NOT "$ENV{AUDIO}" STREQUAL "0")
+        message(FATAL_ERROR
+            "XINPUT=1 is XUSB-only in Phase 0: build with AUDIO=0. "
+            "Audio comes back in Phase 1 (see xinput-firmware-handoff.md).")
+    endif()
+    if(DEFINED ENV{TOUCHPAD} OR DEFINED ENV{GYRO})
+        message(FATAL_ERROR
+            "XINPUT=1 is mutually exclusive with TOUCHPAD/GYRO: the X360 "
+            "target does not carry those inputs.")
+    endif()
+    if("$ENV{GAMEPAD}" STREQUAL "0")
+        message(STATUS "Feature GAMEPAD=0: already implied by XINPUT=1")
+    endif()
+    add_compile_definitions(DS4_FEATURE_XINPUT=1 DS4_NO_GAMEPAD=1)
+    target_compile_definitions(app PRIVATE
+        DS4_FEATURE_XINPUT=1 DS4_NO_GAMEPAD=1)
+    target_sources(app PRIVATE src/usb_xinput.c)
+    message(STATUS "Feature XINPUT: enabled (XUSB 045E:028E, DS4 HID persona off)")
+else()
+    if("$ENV{GAMEPAD}" STREQUAL "0")
+        add_compile_definitions(DS4_NO_GAMEPAD=1)
+        target_compile_definitions(app PRIVATE DS4_NO_GAMEPAD=1)
+        message(STATUS "Feature GAMEPAD: disabled")
+    else()
+        message(STATUS "Feature GAMEPAD: enabled (default)")
+    endif()
+endif()
+
 if(NOT "$ENV{AUDIO}" STREQUAL "0")
     # Audio keeps the real-DS4 endpoint layout: speaker OUT 0x01, mic IN 0x82.
     add_compile_definitions(DS4_FEATURE_AUDIO=1)
     target_compile_definitions(app PRIVATE DS4_FEATURE_AUDIO=1)
     message(STATUS "Feature AUDIO: enabled by default (release build)")
     message(STATUS "               set AUDIO=0 only to opt out for diagnostics")
+elseif(DS4_XINPUT_ENABLED)
+    message(STATUS "Feature AUDIO: disabled (XINPUT Phase 0 is XUSB-only)")
 else()
     message(STATUS "Feature AUDIO: disabled (AUDIO=0 diagnostic opt-out)")
 endif()
-if(DEFINED ENV{TOUCHPAD})
+if(NOT DS4_XINPUT_ENABLED AND DEFINED ENV{TOUCHPAD})
     add_compile_definitions(DS4_FEATURE_TOUCHPAD=1)
     target_compile_definitions(app PRIVATE DS4_FEATURE_TOUCHPAD=1)
     message(STATUS "Feature TOUCHPAD: enabled (stub, no behaviour yet)")
 endif()
-if(DEFINED ENV{GYRO})
+if(NOT DS4_XINPUT_ENABLED AND DEFINED ENV{GYRO})
     add_compile_definitions(DS4_FEATURE_GYRO=1)
     target_compile_definitions(app PRIVATE DS4_FEATURE_GYRO=1)
     message(STATUS "Feature GYRO: enabled (stub, no behaviour yet)")

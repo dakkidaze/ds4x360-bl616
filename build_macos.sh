@@ -37,6 +37,13 @@ if [[ "${AUDIO:-}" == "0" ]]; then
     FEATURE_TAG="${FEATURE_TAG}-noaudio"
     FEATURE_DESC="no audio (AUDIO=0 diagnostic)"
 fi
+# XINPUT=1 is the XUSB (Xbox 360) persona. Phase 0 is XUSB-only, so it must
+# be built with AUDIO=0; the tag makes the output name and the .board_type
+# stamp distinct from every DS4 build (a persona switch forces a clean).
+if [[ "${XINPUT:-}" == "1" && "${AUDIO:-}" != "0" ]]; then
+    echo "ERROR: XINPUT=1 Phase 0 is XUSB-only - run with AUDIO=0 (Phase 1 re-adds audio)." >&2
+    exit 1
+fi
 if [[ -n "${DEBUG_CONSOLE:-}" && "${DEBUG_CONSOLE}" != "0" ]]; then
     DEBUG_CONSOLE_ON=1
     FEATURE_TAG="${FEATURE_TAG}-dbg"
@@ -54,7 +61,12 @@ if [[ -n "${GYRO:-}" ]]; then
     FEATURE_TAG="${FEATURE_TAG}-gyro"
     FEATURE_DESC="${FEATURE_DESC} + gyro stub"
 fi
-if [[ "${GAMEPAD:-}" == "0" ]]; then
+if [[ "${XINPUT:-}" == "1" ]]; then
+    # Mutually exclusive with the DS4 HID gamepad: the XUSB interface is the
+    # only gamepad in this build.
+    FEATURE_TAG="${FEATURE_TAG}-xinput"
+    FEATURE_DESC="XInput (XUSB 045E:028E) persona, no DS4 HID"
+elif [[ "${GAMEPAD:-}" == "0" ]]; then
     FEATURE_TAG="${FEATURE_TAG}-nogp"
     FEATURE_DESC="${FEATURE_DESC}, no gamepad"
 else
@@ -83,6 +95,9 @@ esac
 echo "[build] USB:  Full-Speed only (12 Mbps, enforced; HS not supported)"
 echo "[build] Audio: default (AUDIO=0 to disable)"
 echo "[build] Features: ${FEATURE_DESC}"
+if [[ "${XINPUT:-}" == "1" ]]; then
+    echo "[build] Persona: XInput / XUSB (VID 045E PID 028E), DS4 HID disabled"
+fi
 
 # ── 环境变量（仅脚本执行期间生效） ──
 export BL_SDK_BASE="${SCRIPT_DIR}/../bouffalo_sdk"
