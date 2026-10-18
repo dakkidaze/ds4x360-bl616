@@ -590,28 +590,21 @@ static void xinput_rumble_glue(uint8_t strong, uint8_t weak)
 static void xinput_led_glue(uint8_t cmd)
 {
     uint8_t msg[DS4_USB_OUTPUT_PAYLOAD_LEN + 1] = {0};
-    uint8_t r;
-    uint8_t g;
-    uint8_t b;
 
     if (!output_callback)
         return;
 
-    /* 0x06..0x09 = player 1..4; every other command is ignored. */
-    switch (cmd) {
-    case 0x06: r = 0;   g = 0;   b = 255; break; /* P1 blue    */
-    case 0x07: r = 255; g = 0;   b = 0;   break; /* P2 red     */
-    case 0x08: r = 0;   g = 255; b = 0;   break; /* P3 green   */
-    case 0x09: r = 255; g = 0;   b = 255; break; /* P4 magenta */
-    default:
+    /* 0x06..0x09 = player 1..4; every other command is ignored. Every player
+     * colour maps to the Xbox green primer so a host LED command cannot
+     * override the persona's lightbar. */
+    if (cmd < 0x06 || cmd > 0x09)
         return;
-    }
 
     msg[0] = DS4_USB_OUTPUT_REPORT_ID;
     msg[1] = 0x02;   /* flags: lightbar enable */
-    msg[6] = r;
-    msg[7] = g;
-    msg[8] = b;
+    msg[6] = 0x10;   /* LED R — Xbox green */
+    msg[7] = 0x7C;   /* LED G */
+    msg[8] = 0x10;   /* LED B */
     output_callback(msg, (uint16_t)sizeof(msg));
 }
 #endif /* DS4_FEATURE_XINPUT */

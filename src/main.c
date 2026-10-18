@@ -184,16 +184,23 @@ void ds4_set_output_hdr2(uint8_t v)
 }
 
 /* Called from l2cap_intr_connected (earliest possible moment).
- * DS4Dongle on HID open: gold lightbar, then headset L/R + speaker
- * volume defaults 0x50. */
+ * DS4Dongle on HID open: lightbar, then headset L/R + speaker volume
+ * defaults 0x50. The DS4 persona keeps the gold primer; the XUSB persona
+ * uses Xbox green so a reconnect never flashes DS4 gold. */
 static void on_hid_primer(void)
 {
     uint8_t payload[DS4_USB_OUTPUT_PAYLOAD_LEN] = {0};
 
     payload[0] = 0x02;   /* flags: enable LED update */
+#ifdef DS4_FEATURE_XINPUT
+    payload[5] = 0x10;   /* LED R — Xbox green */
+    payload[6] = 0x7C;   /* LED G */
+    payload[7] = 0x10;   /* LED B */
+#else
     payload[5] = 0xFF;   /* LED R — gold */
     payload[6] = 0xD7;   /* LED G */
     payload[7] = 0x00;   /* LED B */
+#endif
     ds4_send_output_payload(payload, sizeof(payload));
 
     memset(payload, 0, sizeof(payload));
@@ -876,17 +883,11 @@ static void usb_task(void *arg)
 
     usb_gamepad_init(on_usb_output);
 
-#ifdef DS4_FEATURE_XINPUT
-    /* XUSB persona: enumerate immediately so a bare Windows host can bind
-     * xusb22 without a BT controller. The mapper keeps publishing neutral
-     * frames until a controller connects.
-     * (The DS4 persona deliberately hides USB until a controller connects;
-     * that product behaviour is unchanged in non-XINPUT builds.) */
-    usb_phy_request(USB_PHY_REQ_CONNECT, USB_PHY_OWNER_MAIN);
-    usb_phy_process();
-#else
-    /* DS4Dongle production behavior: hide USB at boot. The device
-     * enumerates only after a controller connects (CONNECTED state).
+    /* Both personas hide USB at boot: the device enumerates only after a
+     * controller connects (CONNECTED state). For the XUSB persona this means
+     * xusb22 binds only once there is a pad to report; the mapper keeps
+     * publishing neutral frames into the not-yet-configured endpoint, which
+     * is a no-op until the host configures the interface.
      * NOTE: debug builds keep this too — USB-up-from-boot wedges the
      * controller (device never enumerates at all), and pairing needs BT
      * without USB enumeration racing it. USB also comes up together with the
@@ -895,7 +896,6 @@ static void usb_task(void *arg)
     vTaskDelay(pdMS_TO_TICKS(150));
     usb_phy_request(USB_PHY_REQ_DISCONNECT, USB_PHY_OWNER_MAIN);
     usb_phy_process();
-#endif
 
     uint8_t raw_report[DS4_BT_INPUT_PAYLOAD_SIZE];
     usb_in_msg_t in_msg;
