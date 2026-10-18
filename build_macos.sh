@@ -37,13 +37,10 @@ if [[ "${AUDIO:-}" == "0" ]]; then
     FEATURE_TAG="${FEATURE_TAG}-noaudio"
     FEATURE_DESC="no audio (AUDIO=0 diagnostic)"
 fi
-# XINPUT=1 is the XUSB (Xbox 360) persona. Phase 0 is XUSB-only, so it must
-# be built with AUDIO=0; the tag makes the output name and the .board_type
-# stamp distinct from every DS4 build (a persona switch forces a clean).
-if [[ "${XINPUT:-}" == "1" && "${AUDIO:-}" != "0" ]]; then
-    echo "ERROR: XINPUT=1 Phase 0 is XUSB-only - run with AUDIO=0 (Phase 1 re-adds audio)." >&2
-    exit 1
-fi
+# XINPUT=1 is the XUSB (Xbox 360) persona. XUSB must be interface 0, so the
+# audio function (when enabled) follows at 1/2/3. The tag makes the output
+# name and the .board_type stamp distinct from every DS4 build (a persona
+# switch forces a clean).
 if [[ -n "${DEBUG_CONSOLE:-}" && "${DEBUG_CONSOLE}" != "0" ]]; then
     DEBUG_CONSOLE_ON=1
     FEATURE_TAG="${FEATURE_TAG}-dbg"
@@ -63,9 +60,14 @@ if [[ -n "${GYRO:-}" ]]; then
 fi
 if [[ "${XINPUT:-}" == "1" ]]; then
     # Mutually exclusive with the DS4 HID gamepad: the XUSB interface is the
-    # only gamepad in this build.
+    # only gamepad in this build. Audio follows AUDIO (enabled by default,
+    # so the default XINPUT build is the XUSB + UAC1 composite).
     FEATURE_TAG="${FEATURE_TAG}-xinput"
-    FEATURE_DESC="XInput (XUSB 045E:028E) persona, no DS4 HID"
+    if [[ "${AUDIO:-}" == "0" ]]; then
+        FEATURE_DESC="XInput (XUSB 045E:028E) persona, XUSB-only (no audio)"
+    else
+        FEATURE_DESC="XInput (XUSB 045E:028E) persona + audio, no DS4 HID"
+    fi
 elif [[ "${GAMEPAD:-}" == "0" ]]; then
     FEATURE_TAG="${FEATURE_TAG}-nogp"
     FEATURE_DESC="${FEATURE_DESC}, no gamepad"
@@ -321,6 +323,7 @@ case "$ACTION" in
         echo "Features:"
         echo "  音频默认启用（AUDIO=0 仅供诊断时关闭）"
         echo "  GAMEPAD=0  去掉手柄 HID；TOUCHPAD=1 / GYRO=1 为预留开关"
+        echo "  XINPUT=1   Xbox 360 (XUSB) persona，默认带音频；AUDIO=0 仅 XUSB"
         echo ""
         echo "Examples:"
         echo "  ./build_macos.sh rebuild                    # 发布候选：audio + gamepad"
@@ -328,6 +331,8 @@ case "$ACTION" in
         echo "  MIC_DIAG=1 ./build_macos.sh rebuild         # 麦克风诊断 → -diag.bin"
         echo "  GAMEPAD=0 ./build_macos.sh rebuild          # 仅音频 → -nogp.bin"
         echo "  AUDIO=0 ./build_macos.sh rebuild            # 诊断：无音频 → -noaudio.bin"
+        echo "  XINPUT=1 ./build_macos.sh rebuild           # XInput 手柄 + 音频 → -xinput.bin"
+        echo "  XINPUT=1 AUDIO=0 ./build_macos.sh rebuild   # 仅 XUSB → -noaudio-xinput.bin"
         exit 1
         ;;
 esac

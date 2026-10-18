@@ -48,19 +48,15 @@ target_sources(app PRIVATE
 #   XINPUT=1   : XUSB (Xbox 360 wired pad) persona instead of the DS4 HID
 #                persona. The two personas are mutually exclusive: XINPUT
 #                builds the XUSB descriptors/interface and never registers
-#                the DS4 HID interface. Phase 0 is XUSB-only, so it requires
-#                AUDIO=0; Phase 1 reconnects the UAC1 paths.
+#                the DS4 HID interface. Phase 1: audio follows AUDIO — it is
+#                enabled by default (XUSB + UAC1 composite) and AUDIO=0 is
+#                the XUSB-only diagnostic variant.
 set(DS4_XINPUT_ENABLED FALSE)
 if("$ENV{XINPUT}" STREQUAL "1")
     set(DS4_XINPUT_ENABLED TRUE)
 endif()
 
 if(DS4_XINPUT_ENABLED)
-    if(NOT "$ENV{AUDIO}" STREQUAL "0")
-        message(FATAL_ERROR
-            "XINPUT=1 is XUSB-only in Phase 0: build with AUDIO=0. "
-            "Audio comes back in Phase 1 (see xinput-firmware-handoff.md).")
-    endif()
     if(DEFINED ENV{TOUCHPAD} OR DEFINED ENV{GYRO})
         message(FATAL_ERROR
             "XINPUT=1 is mutually exclusive with TOUCHPAD/GYRO: the X360 "
@@ -76,7 +72,7 @@ if(DS4_XINPUT_ENABLED)
         src/usb_xinput.c
         src/xinput_map.c
     )
-    message(STATUS "Feature XINPUT: enabled (XUSB 045E:028E, DS4 HID persona off)")
+    message(STATUS "Feature XINPUT: enabled (XUSB 045E:028E, DS4 HID persona off; audio follows AUDIO - enabled by default, AUDIO=0 for XUSB-only)")
 else()
     if("$ENV{GAMEPAD}" STREQUAL "0")
         add_compile_definitions(DS4_NO_GAMEPAD=1)
@@ -94,7 +90,7 @@ if(NOT "$ENV{AUDIO}" STREQUAL "0")
     message(STATUS "Feature AUDIO: enabled by default (release build)")
     message(STATUS "               set AUDIO=0 only to opt out for diagnostics")
 elseif(DS4_XINPUT_ENABLED)
-    message(STATUS "Feature AUDIO: disabled (XINPUT Phase 0 is XUSB-only)")
+    message(STATUS "Feature AUDIO: disabled (XINPUT=1 AUDIO=0: XUSB-only)")
 else()
     message(STATUS "Feature AUDIO: disabled (AUDIO=0 diagnostic opt-out)")
 endif()

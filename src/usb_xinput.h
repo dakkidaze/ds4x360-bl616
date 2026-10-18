@@ -67,6 +67,13 @@ typedef void (*usb_xinput_led_cb_t)(uint8_t cmd);
 /* Descriptor accessors for usb_gamepad.c's advance-descriptor callbacks. */
 const uint8_t *usb_xinput_device_desc(void);
 const uint8_t *usb_xinput_config_desc(void);
+
+/* The 40-byte interface block of the XUSB-only configuration (Interface 9 +
+ * inline 0x21 class descriptor 17 + EP IN 7 + EP OUT 7), for splicing into
+ * the composite XUSB + audio configuration. Points into the single source
+ * array in usb_xinput.c; the caller copies `*len` bytes from it.
+ * usb_xinput_config_desc() stays the complete 49-byte XUSB-only config. */
+const uint8_t *usb_xinput_interface_block(uint16_t *len);
 const char *usb_xinput_string_desc(uint8_t index);
 
 /* Register interface 0 + both endpoints. Must be called before

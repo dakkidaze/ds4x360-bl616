@@ -132,6 +132,19 @@ const uint8_t *usb_xinput_config_desc(void)
     return xinput_config_desc;
 }
 
+/* The interface block inside xinput_config_desc, for the composite
+ * configuration descriptor (XUSB + UAC1 audio). 40 bytes = Interface (9) +
+ * inline 0x21 (17) + EP IN (7) + EP OUT (7); config byte 9 is exactly where
+ * the interface descriptor starts. No copy: the caller memcpy's from this
+ * single source so the bytes cannot drift. */
+const uint8_t *usb_xinput_interface_block(uint16_t *len)
+{
+    if (len) {
+        *len = (uint16_t)(sizeof(xinput_config_desc) - 9);
+    }
+    return xinput_config_desc + 9;
+}
+
 /* A real wired 360 pad reports no serial number and the driver's device
  * name comes from xusb22.inf, not from iProduct. Keep the strings plain. */
 const char *usb_xinput_string_desc(uint8_t index)

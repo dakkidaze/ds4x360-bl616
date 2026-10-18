@@ -1,14 +1,23 @@
 #!/usr/bin/env python3
-"""Self-check for the Phase 0 XUSB descriptors.
+"""Self-check for the XUSB descriptors (XUSB-only and XUSB + UAC1 composite).
 
-Parses the *source of truth* (src/usb_xinput.c + src/usb_xinput.h), resolves
-the numeric macros, and asserts the XUSB invariants. Optionally searches the
-built firmware image for the exact configuration-descriptor bytes, so the
-check covers both "the descriptor is right" and "the descriptor is in the
-firmware".
+Parses the *source of truth* (src/usb_xinput.c + src/usb_xinput.h, and for the
+composite the persona-parameterised audio array in
+src/ds4_usb_audio_desc.h), resolves the numeric macros, and asserts the
+descriptor invariants. Optionally searches the built firmware image for the
+const arrays.
+
+The composite configuration is assembled at RAM init by usb_gamepad_init()
+(9-byte header + 40-byte XUSB interface block + 184-byte audio function), so
+it is not a contiguous sequence in the image: the tool rebuilds it from the
+source arrays exactly as init does and checks the image only for the two const
+arrays it is made from.
 
 Usage:
-    python3 tools/xinput_desc_check.py [--bin build/build_out/<fw>.bin]
+    python3 tools/xinput_desc_check.py [--audio 1|0] [--bin build/build_out/<fw>.bin]
+
+    --audio 1 (default) : XUSB + UAC1 composite, 233 bytes, 4 interfaces
+    --audio 0           : XUSB-only, 49 bytes, 1 interface
 
 Exit code 0 = all checks passed, 1 = at least one failure.
 """
@@ -20,6 +29,7 @@ import sys
 ROOT = __file__.rsplit("/tools/", 1)[0]
 SRC_C = ROOT + "/src/usb_xinput.c"
 SRC_H = ROOT + "/src/usb_xinput.h"
+AUDIO_H = ROOT + "/src/ds4_usb_audio_desc.h"
 
 failures = []
 checks = 0
@@ -99,9 +109,267 @@ def evaluate_tokens(tokens, values):
     return out
 
 
+# ----------------------------------------------------------------------
+# Minimal preprocessor for src/ds4_usb_audio_desc.h
+# ----------------------------------------------------------------------
+
+def preprocess_audio_header(text):
+    """Evaluate only the conditional patterns the audio header uses.
+
+    The header's include guard is removed first. Then:
+        #ifdef DS4_FEATURE_XINPUT -> active   (XINPUT persona build)
+        #ifdef CONFIG_USB_HS     -> inactive (Full-Speed build: FS 0x01)
+    #define lines are kept for load_defines(). Any other directive is
+    "unexpected" and stops the tool: this is deliberately not a general
+    preprocessor.
+    """
+    text, n = re.subn(r"^\s*#ifndef\s+DS4_USB_AUDIO_DESC_H\b[^\n]*\n", "",
+                      text, count=1, flags=re.M)
+    if n != 1:
+        raise SystemExit("audio header include guard not found in " + AUDIO_H)
+    text, n = re.subn(r"\n\s*#endif[^\n]*\s*$", "\n", text)
+    if n != 1:
+        raise SystemExit("audio header closing #endif not found in " + AUDIO_H)
+
+    out = []
+    stack = []          # [(parent_active, condition)]
+    active = True
+    for lineno, line in enumerate(text.splitlines(), 1):
+        m = re.match(r"^\s*#\s*(\w+)\b(.*)$", line)
+        if not m:
+            if active:
+                out.append(line)
+            continue
+        directive, rest = m.group(1), m.group(2).strip()
+        if directive == "define":
+            if active:
+                out.append(line)
+        elif directive == "ifdef":
+            name = rest.split()[0] if rest else ""
+            if name == "DS4_FEATURE_XINPUT":
+                cond = True
+            elif name == "CONFIG_USB_HS":
+                cond = False
+            else:
+                raise SystemExit(
+                    f"unexpected #ifdef {name!r} at {AUDIO_H}:{lineno}")
+            stack.append((active, cond))
+            active = active and cond
+        elif directive == "else":
+            if not stack:
+                raise SystemExit(f"unmatched #else at {AUDIO_H}:{lineno}")
+            parent, cond = stack[-1]
+            active = parent and not cond
+        elif directive == "endif":
+            if not stack:
+                raise SystemExit(f"unmatched #endif at {AUDIO_H}:{lineno}")
+            parent, _ = stack.pop()
+            active = parent
+        else:
+            raise SystemExit(
+                f"unexpected preprocessor directive #{directive} at "
+                f"{AUDIO_H}:{lineno}")
+    if stack:
+        raise SystemExit("unterminated #ifdef in " + AUDIO_H)
+    return "\n".join(out)
+
+
+def parse_audio_desc():
+    """The 184-byte audio_desc as the XINPUT composite sees it."""
+    text = open(AUDIO_H, encoding="utf-8").read()
+    text = strip_comments(preprocess_audio_header(text))
+    values = resolve(load_defines(text))
+    tokens = extract_array(text, "audio_desc")
+    if tokens is None:
+        raise SystemExit("audio_desc array not found in " + AUDIO_H)
+    if values.get("DS4_AUDIO_EP_OUT") is None or \
+       values.get("DS4_AUDIO_EP_IN") is None:
+        raise SystemExit("audio endpoint macros did not resolve")
+    return evaluate_tokens(tokens, values)
+
+
+# ----------------------------------------------------------------------
+# Composite (XUSB + UAC1) configuration
+# ----------------------------------------------------------------------
+
+def walk_chain(buf):
+    """Split a configuration into (offset, bLength, bDescriptorType) records."""
+    chain = []
+    i = 0
+    while i < len(buf):
+        blen = buf[i]
+        if blen < 2 or i + blen > len(buf):
+            return None
+        chain.append((i, blen, buf[i + 1]))
+        i += blen
+    return chain
+
+
+def validate_composite(cfg, audio):
+    """Rebuild the 233-byte config exactly as usb_gamepad_init() does and
+    validate it. cfg is the 49-byte XUSB-only config, audio the 184-byte
+    XINPUT audio array."""
+    print("Composite configuration (XUSB + UAC1)")
+    check(len(cfg) == 49, "XUSB-only source config is 49 bytes", f"{len(cfg)}")
+    check(len(audio) == 184, "XINPUT audio descriptor is 184 bytes",
+          f"{len(audio)}")
+    if len(cfg) != 49 or len(audio) != 184:
+        return
+
+    # usb_gamepad_init(): header (9) + XUSB interface block (40) + audio (184).
+    comp = cfg[0:9] + cfg[9:49] + audio
+    comp[2] = 233 & 0xFF
+    comp[3] = (233 >> 8) & 0xFF
+    comp[4] = 4
+
+    total = comp[2] | (comp[3] << 8)
+    check(len(comp) == 233, "composite length == 233", f"{len(comp)}")
+    check(comp[0] == 9 and comp[1] == 0x02,
+          "config header 9 bytes / type 0x02")
+    check(total == 233, "wTotalLength == 233", f"{total}")
+    check(comp[4] == 4, "bNumInterfaces == 4")
+    check(comp[5] == 1, "bConfigurationValue == 1")
+    check(comp[6] == 0, "iConfiguration == 0")
+    check(comp[7] == 0xA0, "bmAttributes == 0xA0 (bus powered + wakeup)")
+    check(comp[8] == 250, "bMaxPower == 250 (500 mA)")
+
+    chain = walk_chain(comp)
+    check(chain is not None, "descriptor chain is well formed")
+    if chain is None:
+        return
+    consumed = chain[-1][0] + chain[-1][1]
+    check(consumed == len(comp),
+          "descriptor chain consumes exactly 233 bytes", f"consumed {consumed}")
+
+    intfs = []      # (offset, number, alt, nEP, class triple)
+    eps = {}        # address -> (attr, mps, interval)
+    xusb = None     # (offset, length)
+    ac = None       # offset of the AC header descriptor
+    for off, blen, dtype in chain:
+        if dtype == 0x04:
+            intfs.append((off, comp[off + 2], comp[off + 3], comp[off + 4],
+                          comp[off + 5:off + 8]))
+        elif dtype == 0x21:
+            xusb = (off, blen)
+        elif dtype == 0x24 and comp[off + 2] == 0x01 and blen == 10:
+            # The 10-byte AC header (subtype 1); AS FORMAT_TYPE_I is also
+            # subtype 1 but only 7 bytes long.
+            ac = off
+        elif dtype == 0x05:
+            eps[comp[off + 2]] = (comp[off + 3],
+                                  comp[off + 4] | (comp[off + 5] << 8),
+                                  comp[off + 6])
+
+    def intf(num, alt):
+        for rec in intfs:
+            if rec[1] == num and rec[2] == alt:
+                return rec
+        return None
+
+    i0 = intf(0, 0)
+    check(i0 is not None and i0[3] == 2, "interface 0 present with 2 endpoints")
+    check(i0 is not None and i0[4] == [0xFF, 0x5D, 0x01],
+          "interface 0 class/subclass/protocol == FF/5D/01")
+    check(xusb is not None and xusb[1] == 17,
+          "interface 0 has the 17-byte inline 0x21 descriptor")
+    if xusb:
+        o = xusb[0]
+        check(comp[o + 6] == 0x82 and comp[o + 7] == 20,
+              "0x21 IN endpoint 0x82 / 20-byte report",
+              f"0x{comp[o + 6]:02x}/{comp[o + 7]}")
+        check(comp[o + 13] == 0x03 and comp[o + 14] == 8,
+              "0x21 OUT endpoint 0x03 / 8-byte report",
+              f"0x{comp[o + 13]:02x}/{comp[o + 14]}")
+    check(eps.get(0x82, (None,))[0] == 0x03,
+          "EP 0x82 is interrupt", str(eps.get(0x82)))
+    check(eps.get(0x82, (None, None))[1] == 32, "EP 0x82 MPS == 32")
+    check(eps.get(0x82, (None, None, None))[2] == 4,
+          "EP 0x82 bInterval == 4 (250 Hz)")
+    check(eps.get(0x03, (None,))[0] == 0x03,
+          "EP 0x03 is interrupt", str(eps.get(0x03)))
+    check(eps.get(0x03, (None, None))[1] == 32, "EP 0x03 MPS == 32")
+    check(eps.get(0x03, (None, None, None))[2] == 8, "EP 0x03 bInterval == 8")
+
+    i1 = intf(1, 0)
+    check(i1 is not None, "interface 1 present (audio control)")
+    check(i1 is not None and i1[4] == [0x01, 0x01, 0x00],
+          "interface 1 class/subclass/protocol == 01/01/00 (audio control)")
+    check(ac is not None, "audio control header descriptor present")
+    if ac is not None:
+        n = comp[ac + 7]
+        check(n == 2 and comp[ac + 8:ac + 8 + n] == [2, 3],
+              "AC header baInterfaceNr == [2, 3]",
+              str(comp[ac + 7:ac + 8 + n]))
+
+    i2a0 = intf(2, 0)
+    i2a1 = intf(2, 1)
+    check(i2a0 is not None and i2a0[3] == 0,
+          "interface 2 alt 0 present (AS OUT, no endpoints)")
+    check(i2a0 is not None and i2a0[4] == [0x01, 0x02, 0x00],
+          "interface 2 class/subclass/protocol == 01/02/00 (AS OUT)")
+    check(i2a1 is not None and i2a1[3] == 1,
+          "interface 2 alt 1 present (AS OUT, 1 endpoint)")
+    check(eps.get(0x01, (None,))[0] == 0x09,
+          "EP 0x01 is isochronous", str(eps.get(0x01)))
+    check(eps.get(0x01, (None, None))[1] == 132, "EP 0x01 MPS == 132")
+    check(eps.get(0x01, (None, None, None))[2] == 1,
+          "EP 0x01 bInterval == 1 (1 ms at FS)")
+
+    i3a0 = intf(3, 0)
+    i3a1 = intf(3, 1)
+    check(i3a0 is not None and i3a0[3] == 0,
+          "interface 3 alt 0 present (AS IN, no endpoints)")
+    check(i3a0 is not None and i3a0[4] == [0x01, 0x02, 0x00],
+          "interface 3 class/subclass/protocol == 01/02/00 (AS IN)")
+    check(i3a1 is not None and i3a1[3] == 1,
+          "interface 3 alt 1 present (AS IN, 1 endpoint)")
+    check(eps.get(0x84, (None,))[0] == 0x05,
+          "EP 0x84 is isochronous", str(eps.get(0x84)))
+    check(eps.get(0x84, (None, None))[1] == 34, "EP 0x84 MPS == 34")
+    check(eps.get(0x84, (None, None, None))[2] == 1,
+          "EP 0x84 bInterval == 1 (1 ms at FS)")
+
+    indices = sorted(addr & 0x7F for addr in eps)
+    check(indices == [1, 2, 3, 4],
+          "endpoint indices 1/2/3/4 are distinct FIFOs", str(indices))
+    check(0x82 in eps and 0x03 in eps and 0x01 in eps and 0x84 in eps and
+          (0x82 & 0x7F, 0x03 & 0x7F, 0x01 & 0x7F, 0x84 & 0x7F) == (2, 3, 1, 4),
+          "endpoint mapping 0x82/0x03/0x01/0x84 -> idx 2/3/1/4")
+
+    print("  composite chain:")
+    names = {0x02: "CONFIG", 0x04: "INTERFACE", 0x05: "ENDPOINT",
+             0x21: "XUSB 0x21", 0x24: "CLASS"}
+    for off, blen, dtype in chain:
+        name = names.get(dtype, f"type 0x{dtype:02x}")
+        if dtype == 0x02:
+            extra = (f"total={comp[off + 2] | (comp[off + 3] << 8)} "
+                     f"nIntf={comp[off + 4]}")
+        elif dtype == 0x04:
+            extra = (f"num={comp[off + 2]} alt={comp[off + 3]} "
+                     f"nEP={comp[off + 4]} "
+                     f"class={comp[off + 5]:02x}/{comp[off + 6]:02x}/"
+                     f"{comp[off + 7]:02x}")
+        elif dtype == 0x21:
+            extra = (f"IN=0x{comp[off + 6]:02x}/{comp[off + 7]}B "
+                     f"OUT=0x{comp[off + 13]:02x}/{comp[off + 14]}B")
+        elif dtype == 0x05:
+            mps = comp[off + 4] | (comp[off + 5] << 8)
+            extra = (f"0x{comp[off + 2]:02x} attr=0x{comp[off + 3]:02x} "
+                     f"mps={mps} interval={comp[off + 6]}")
+        elif dtype == 0x24:
+            extra = f"subtype=0x{comp[off + 2]:02x}"
+        else:
+            extra = ""
+        print(f"    [{off:3}] {name:<10} len={blen:2} {extra}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--bin", dest="bin_path", default=None)
+    ap.add_argument("--audio", dest="audio", type=int, choices=(0, 1),
+                    default=1,
+                    help="1 = XUSB+UAC1 composite (default), "
+                         "0 = XUSB-only")
     args = ap.parse_args()
 
     ctext = strip_comments(open(SRC_C, encoding="utf-8").read())
@@ -115,6 +383,8 @@ def main():
 
     dev = evaluate_tokens(dev_tokens, values)
     cfg = evaluate_tokens(cfg_tokens, values)
+
+    audio = parse_audio_desc() if args.audio else None
 
     print("Device descriptor")
     check(len(dev) == 18, "bLength == 18", f"{len(dev)}")
@@ -212,6 +482,9 @@ def main():
         check(cfg[o + 6] == 0x82 and cfg[o + 13] == 0x03 == 0x03,
               "0x21 endpoint bytes match endpoint descriptors")
 
+    if args.audio:
+        validate_composite(cfg, audio)
+
     print("Protocol glue")
     check("0xC1" in ctext and "0x0100" in ctext,
           "vendor handshake 0xC1 / bRequest 0x01 / wValue 0x0100")
@@ -228,13 +501,28 @@ def main():
           "fixed Phase 0 report sets A (button bit 0x1000)")
 
     if args.bin_path:
-        print("Firmware image")
         blob = open(args.bin_path, "rb").read()
-        pattern = bytes(cfg)
-        check(pattern in blob, "config descriptor byte sequence found in .bin",
-              args.bin_path)
-        check(b"Xbox 360 Controller for Windows" in blob,
-              "product string present in .bin")
+        if args.audio:
+            print("Firmware image (composite)")
+            print("  note: the 233-byte config is spliced at RAM init, so it is")
+            print("        validated from source, not as a contiguous .bin")
+            print("        sequence; the two const arrays it is built from are")
+            print("        checked below.")
+            check(bytes(cfg) in blob,
+                  "XUSB-only 49-byte config present in .bin", args.bin_path)
+            check(bytes(audio) in blob,
+                  "XINPUT 184-byte audio descriptor present in .bin",
+                  args.bin_path)
+            check(b"Xbox 360 Controller for Windows" in blob,
+                  "product string present in .bin")
+        else:
+            print("Firmware image")
+            pattern = bytes(cfg)
+            check(pattern in blob,
+                  "config descriptor byte sequence found in .bin",
+                  args.bin_path)
+            check(b"Xbox 360 Controller for Windows" in blob,
+                  "product string present in .bin")
 
     print()
     if failures:

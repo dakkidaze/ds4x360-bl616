@@ -80,6 +80,16 @@
 #else
 #define DS4_GAMEPAD_DESC_LEN 25  /* intf 9 + HID desc 9 + EP 7 */
 #endif
+#ifdef DS4_FEATURE_XINPUT
+/* Composite configuration: 9-byte config header + the 40-byte XUSB interface
+ * block (Interface + 0x21 + EP IN + EP OUT) + optional 184-byte audio
+ * function. Without audio the header copied from usb_xinput_config_desc()
+ * already says wTotalLength 49 / bNumInterfaces 1, so only the audio build
+ * patches the header. */
+#define USB_XINPUT_BLOCK_LEN 40
+#define USB_CONFIG_SIZE      (9 + USB_XINPUT_BLOCK_LEN + DS4_AUDIO_DESC_LEN)
+#define AUDIO_DESC_OFF       (9 + USB_XINPUT_BLOCK_LEN)   /* 49 */
+#else
 #define USB_CONFIG_SIZE      (9 + DS4_AUDIO_DESC_LEN + DS4_GAMEPAD_DESC_LEN)
 #define AUDIO_DESC_OFF       9
 #define GAMEPAD_DESC_OFF     (AUDIO_DESC_OFF + DS4_AUDIO_DESC_LEN)
@@ -87,6 +97,7 @@
 #define HID_DESC_OFF         (HID_INTF_OFF + 9)
 #define HID_WDLEN_OFF        (HID_DESC_OFF + 7)
 #define BINTERVAL_EP_IN_OFF  (HID_DESC_OFF + 9 + 6)
+#endif
 
 #ifdef DS4_FEATURE_AUDIO
 #define DS4_N_AUDIO_INTF     3
@@ -175,7 +186,11 @@ static uint8_t device_desc[] = {
     0x00,                    /* iSerialNumber: none (patched when enable_usb_sn) */
     0x01,                    /* bNumConfigurations */
 };
+#endif /* !DS4_FEATURE_XINPUT */
 
+/* Configuration descriptor for both personas. DS4: header + audio 184 at
+ * offset 9 + gamepad 25. XINPUT: header + 40-byte XUSB block at offset 9 +
+ * optional audio 184 at offset 49; usb_gamepad_init() fills it in. */
 static uint8_t config_desc[USB_CONFIG_SIZE] = {
     /* Configuration Descriptor (9 bytes) */
     0x09, 0x02,
@@ -185,11 +200,11 @@ static uint8_t config_desc[USB_CONFIG_SIZE] = {
     0x00,                    /* iConfiguration */
     0xC0,                    /* bmAttributes: self-powered (remote-wake added in P3) */
     USBD_MAX_POWER,          /* bMaxPower: 500mA */
-    /* [AUDIO_DESC_OFF ..] 184 bytes: DS4 UAC1 audio (intf 0/1/2)
-     * [HID_INTF_OFF ..]  25 bytes: gamepad intf 3 + HID desc + EP IN
-     * all spliced from their arrays in usb_gamepad_init() */
+    /* DS4: [AUDIO_DESC_OFF ..] 184 bytes UAC1 audio (intf 0/1/2), then
+     *      [HID_INTF_OFF ..] 25 bytes gamepad intf 3 + HID desc + EP IN.
+     * XINPUT: [9 ..] 40-byte XUSB block, then optional audio at 49.
+     * All spliced from their arrays in usb_gamepad_init(). */
 };
-#endif /* !DS4_FEATURE_XINPUT */
 
 #ifndef DS4_NO_GAMEPAD
 /* Gamepad interface block: Interface 3 + HID descriptor + EP IN
@@ -238,11 +253,9 @@ static const uint8_t *desc_device_cb(uint8_t speed)
 static const uint8_t *desc_config_cb(uint8_t speed)
 {
     (void)speed;
-#ifdef DS4_FEATURE_XINPUT
-    return usb_xinput_config_desc();
-#else
+    /* Both personas serve the spliced buffer: DS4 (audio + gamepad) and the
+     * XINPUT composite (XUSB block + optional audio). */
     return config_desc;
-#endif
 }
 
 static const uint8_t device_qualifier_desc[] = {
@@ -642,7 +655,27 @@ int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
     usb_gamepad_set_polling_rate(config_polling_mode());
 #endif
 #else
-    /* XUSB persona: descriptors are static in usb_xinput.c, nothing to patch. */
+    /* XUSB persona: assemble the composite configuration from the XUSB-only
+     * descriptor (single source of truth) plus the optional audio function.
+     * Without audio the copied 9-byte header already says wTotalLength 49 /
+     * bNumInterfaces 1, so the header patch below is audio-only. */
+    memcpy(config_desc, usb_xinput_config_desc(), 9);
+    {
+        uint16_t blen = 0;
+        const uint8_t *blk = usb_xinput_interface_block(&blen);
+        memcpy(config_desc + 9, blk, blen);      /* 40 bytes */
+    }
+#ifdef DS4_FEATURE_AUDIO
+    {
+        uint16_t alen = 0;
+        const uint8_t *adesc = usb_audio_get_desc(&alen);
+        memcpy(config_desc + AUDIO_DESC_OFF, adesc, alen); /* 184 at 49 */
+    }
+    /* 9 + 40 + 184 = 233 bytes; XUSB 0, AudioControl 1, AS OUT 2, AS IN 3. */
+    config_desc[2] = (uint8_t)(sizeof(config_desc) & 0xFF);
+    config_desc[3] = (uint8_t)((sizeof(config_desc) >> 8) & 0xFF);
+    config_desc[4] = 4;
+#endif
     LOG_INF("[USB-INIT] XUSB persona: VID=%04x PID=%04x bcdDevice=%04x\n",
             USB_XINPUT_VID, USB_XINPUT_PID, USB_XINPUT_BCD_DEVICE);
 #endif
@@ -654,7 +687,7 @@ int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
     usbd_desc_register(0, &usb_desc);
 #ifdef DS4_FEATURE_XINPUT
     LOG_INF("[USB-INIT] Descriptors registered (dev=%uB, cfg=%uB)\n",
-            (unsigned)18, (unsigned)49);
+            (unsigned)18, (unsigned)sizeof(config_desc));
 #else
     LOG_INF("[USB-INIT] Descriptors registered (dev=%uB, cfg=%uB)\n",
            (unsigned)sizeof(device_desc), (unsigned)sizeof(config_desc));
@@ -664,6 +697,13 @@ int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
     /* Interface 0: XUSB. Registered before everything else so intf_num is 0
      * and the 0xC1/0x01 handshake can use wIndex 0. */
     usb_xinput_register(0);
+#ifdef DS4_FEATURE_AUDIO
+    /* Composite: audio control/stream/mic follow in registration order as
+     * interfaces 1/2/3. */
+    usb_audio_register(0);
+    LOG_INF("[USB-INIT] Audio UAC1 intfs added after XUSB "
+            "(spk EP 0x01 / mic EP 0x%02x)\n", (unsigned)DS4_AUDIO_EP_IN);
+#endif
 #else
     /* Interfaces 0/1/2: DS4 UAC1 audio (must be added before the gamepad —
      * CherryUSB numbers interfaces in registration order) */

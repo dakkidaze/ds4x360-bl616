@@ -1143,7 +1143,12 @@ void usb_audio_early_init(void)
 /* Diagnostic: the DCIA re-maps all four FIFOs on every usbd_ep_open, but we
  * only use indexes 1/2/4 (audio OUT, mic IN, gamepad IN), leaving FIFO F2
  * (index 3) mapped but never configured. The DS5Dongle uses all four and its
- * ISO IN mic works, so configure index 3 with an EP the host never sees. */
+ * ISO IN mic works, so configure index 3 with an EP the host never sees.
+ *
+ * XINPUT persona: index 3 / FIFO F2 is the XUSB OUT endpoint (0x03), so this
+ * DS4-only diagnostic is compiled out there — opening it would reconfigure
+ * the XUSB endpoint behind xusb22's back. */
+#ifndef DS4_FEATURE_XINPUT
 static const struct usb_endpoint_descriptor dummy_ep3 = {
     .bLength = 7,
     .bDescriptorType = 0x05,          /* ENDPOINT */
@@ -1152,6 +1157,7 @@ static const struct usb_endpoint_descriptor dummy_ep3 = {
     .wMaxPacketSize = 8,
     .bInterval = 10,
 };
+#endif
 
 void usb_audio_register(uint8_t busid)
 {
@@ -1180,7 +1186,9 @@ void usb_audio_register(uint8_t busid)
     audio_mic_ep.ep_cb = audio_mic_ep_in_handler;
     usbd_add_endpoint(busid, &audio_mic_ep);
 
+#ifndef DS4_FEATURE_XINPUT
     usbd_ep_open(busid, &dummy_ep3);   /* configure FIFO F2 (index 3) */
+#endif
 
     LOG_INF("[AUDIO] UAC1 interfaces registered (DS4 spk+mic)\n");
 }
