@@ -2541,7 +2541,16 @@ int8_t bt_hid_host_get_cached_rssi(void)
     return cached_rssi;
 }
 
-int bt_hid_host_send_output(const uint8_t *data, uint16_t len)
+/* Common producer path for bt_hid_host_send_output() and its epoch-checked
+ * variant. `check_epoch == false` is the historical behaviour (no session
+ * test); when true, the epoch comparison runs inside the same APP_TX_LOCK()
+ * window that publishes the slot, so a command built for a previous
+ * controller connection can never enter the new session's FIFO.
+ *
+ * The legacy entry point must stay byte-for-byte equivalent to the original:
+ * same pre-checks, same drop-oldest behaviour, same counters, same wake. */
+static int app_tx_enqueue_output(const uint8_t *data, uint16_t len,
+                                 bool check_epoch, uint32_t expected_epoch)
 {
     if (!hid_ctx.intr_connected || !hid_ctx.conn)
         return -1;
@@ -2565,6 +2574,16 @@ int bt_hid_host_send_output(const uint8_t *data, uint16_t len)
      * TX service task does the sending; this path never allocates, never
      * submits, never waits and never touches app_tx_inflight. */
     APP_TX_LOCK();
+
+    /* Session guard (epoch variant): app_tx_fifo_reset() bumps app_tx_epoch
+     * under this same lock on every BT reset, so inside this region the epoch
+     * is stable. Checked before next_tail is computed, so a stale command
+     * publishes nothing at all. */
+    if (check_epoch && app_tx_epoch != expected_epoch) {
+        APP_TX_UNLOCK();
+        return -1;
+    }
+
     next_tail = (uint8_t)((app_tx_tail + 1) % APP_TX_DEPTH);
 
     /* FIFO full: drop the oldest frame to make room (same as DS5Dongle).
@@ -2611,6 +2630,24 @@ int bt_hid_host_send_output(const uint8_t *data, uint16_t len)
     app_tx_kick();
 
     return 0;
+}
+
+int bt_hid_host_send_output(const uint8_t *data, uint16_t len)
+{
+    return app_tx_enqueue_output(data, len, false, 0);
+}
+
+int bt_hid_host_send_output_epoch(const uint8_t *data, uint16_t len,
+                                  uint32_t expected_epoch)
+{
+    return app_tx_enqueue_output(data, len, true, expected_epoch);
+}
+
+uint32_t bt_hid_host_tx_epoch(void)
+{
+    /* 32-bit aligned read of a lock-guarded counter; callers use it only as
+     * an equality token, never to order payload bytes. */
+    return app_tx_epoch;
 }
 
 /* Control-channel send with one explicit ownership rule (R04).

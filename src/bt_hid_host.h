@@ -134,6 +134,27 @@ void bt_hid_host_force_disconnect(void);
 int bt_hid_host_send_output(const uint8_t *data, uint16_t len);
 
 /**
+ * Send an output report only if the BT TX session is still `expected_epoch`.
+ * The comparison happens inside the same lock that publishes the FIFO slot,
+ * so a report built for a previous controller connection can never be queued
+ * into the new session.
+ * @param data            report data including Report ID
+ * @param len             data length
+ * @param expected_epoch  value previously returned by bt_hid_host_tx_epoch()
+ * @return 0 on success, -1 when the session changed (nothing published) or
+ *         the report was rejected/dropped like bt_hid_host_send_output().
+ */
+int bt_hid_host_send_output_epoch(const uint8_t *data, uint16_t len,
+                                  uint32_t expected_epoch);
+
+/**
+ * Current TX session token. Bumped under APP_TX_LOCK() by every BT reset, so
+ * it is the atomic identity a producer can stamp on a command and present
+ * again in bt_hid_host_send_output_epoch(). Safe to read from ISR context.
+ */
+uint32_t bt_hid_host_tx_epoch(void);
+
+/**
  * Send a SET_REPORT (Feature) on the control channel.
  * @param report_id  HID report ID
  * @param data       report payload (after report ID)

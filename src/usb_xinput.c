@@ -191,13 +191,24 @@ static usb_xinput_led_cb_t    xinput_led_cb = NULL;
 
 static void xinput_arm_out(void)
 {
+    uintptr_t key;
     int ret;
 
     if (!xinput_configured || out_armed)
         return;
 
-    /* Set the software guard before submitting so an IN-completion-style
-     * re-entry (or usb_xinput_tick() from task context) cannot submit twice. */
+    /* Guard check, submit and failure rollback are ONE interrupt-masked
+     * region. SET_INTERFACE (notify handler) and the OUT completion both run
+     * in interrupt context and clear/observe out_armed; without the mask they
+     * could land between the test and usbd_ep_start_read(), clear the guard
+     * and arm another read, and this path would then submit a second one.
+     * usbd_ep_start_read() takes the same mask internally (bflb_usb_v2.c:
+     * "the mask simply nests"), so this is safe and adds no re-entrancy. */
+    key = bflb_irq_save();
+    if (!xinput_configured || out_armed) {
+        bflb_irq_restore(key);
+        return;
+    }
     out_armed = true;
     ret = usbd_ep_start_read(0, USB_XINPUT_EP_OUT, xinput_out_buf,
                              sizeof(xinput_out_buf));
@@ -205,6 +216,7 @@ static void xinput_arm_out(void)
         out_armed = false;
         g_xinput_out_arm_err++;
     }
+    bflb_irq_restore(key);
 }
 
 static void xinput_try_send_in(void)
@@ -215,6 +227,12 @@ static void xinput_try_send_in(void)
     if (!xinput_configured || in_busy || !pending_valid)
         return;
 
+    /* From the re-check to the submit (and its rollback) is one masked
+     * region. The SET_INTERFACE notify handler clears in_busy from interrupt
+     * context; if it landed after the old re-check but before the submit, it
+     * would release the guard, re-arm the endpoint, and the submit below would
+     * arm a second transfer on the same endpoint. usbd_ep_start_write() takes
+     * the same mask internally, and the mask nests. */
     key = bflb_irq_save();
     if (!xinput_configured || in_busy || !pending_valid) {
         bflb_irq_restore(key);
@@ -223,7 +241,6 @@ static void xinput_try_send_in(void)
     memcpy(xinput_in_buf, (const void *)pending_report,
            USB_XINPUT_REPORT_LEN);
     in_busy = true;
-    bflb_irq_restore(key);
 
     ret = usbd_ep_start_write(0, USB_XINPUT_EP_IN, xinput_in_buf,
                               USB_XINPUT_REPORT_LEN);
@@ -233,6 +250,7 @@ static void xinput_try_send_in(void)
     } else {
         g_xinput_in_sent++;
     }
+    bflb_irq_restore(key);
 }
 
 /* IN completion: the host polled, so re-arm immediately with the newest
