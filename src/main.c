@@ -118,13 +118,17 @@ static volatile uint64_t handshake_start_us;
 static volatile TickType_t connecting_start_tick = 0;
 static volatile bool prev_led_disabled = false;
 static volatile bool scan_after_disconnect = false;
-/* Deferred USB soft-disconnect: wait after BT disconnect before pulling USB.
- * XINPUT: the XUSB device should disappear shortly after the controller
- * drops; 1 s absorbs a transient HCI disconnect and still lets a fast
- * reconnect cancel the teardown (BT_HID_STATE_CONNECTED clears this timer and
- * re-asserts CONNECT when the PHY is already down, and bt_task's timeout path
- * re-asserts CONNECT if it races a reconnect).
- * DS4: keep 10 s so a controller swap does not make the host re-enumerate. */
+/* Deferred USB soft-disconnect: post-IDLE teardown policy, measured from the
+ * BT_HID_STATE_IDLE event, not a reconnect deadline and not a physical-loss
+ * deadline. BT supervision and the existing 3 s input watchdog run first and
+ * produce that IDLE event; only a completed HID CONNECTED before the deadline
+ * cancels the teardown (it clears this timer and re-asserts CONNECT when the
+ * PHY is already down, and bt_task's timeout path re-asserts CONNECT if it
+ * races a reconnect). How quickly a real controller can reconnect after a
+ * dropout still needs hardware validation.
+ * XINPUT: 1 s, so the XUSB device disappears shortly after the controller
+ * drops while a fast HID reconnect inside that second keeps USB up.
+ * DS4: 10 s, so a controller swap does not make the host re-enumerate. */
 #ifdef DS4_FEATURE_XINPUT
 #define USB_DEFERRED_DISC_US  (1ULL * 1000000ULL)   /* 1 s debounce */
 #else

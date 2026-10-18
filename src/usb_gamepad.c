@@ -709,14 +709,15 @@ int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
            (unsigned long)USB_BASE);
     usbd_initialize(0, USB_BASE, usbd_event_handler);
 #ifdef DS4_FEATURE_XINPUT
-    /* usb_dc_init() clears PHY_TST.UNPLUG near the end of its init, so the
-     * pull-up is already enabled while usbd_initialize() runs and the host can
-     * start enumerating before usb_task's 150 ms deferred disconnect. The XUSB
-     * persona must be hidden from the first instant: re-assert the disconnect
-     * through the normal owner path here, in usb_task context, before the host
-     * can complete enumeration. The residual window is the few microseconds
-     * between dc_init returning and this call; a zero-window fix would need an
-     * SDK change. XINPUT-only: the DS4 boot path is unchanged. */
+    /* usb_dc_init() clears PHY_TST.UNPLUG, so the pull-up is live while
+     * usbd_initialize() runs and the host can start enumerating before
+     * usb_task's 150 ms deferred disconnect. This re-asserts the disconnect
+     * through the normal owner path immediately after initialize returns,
+     * before the host can complete enumeration.
+     * The residual window is normally short but non-zero: the rest of the SDK
+     * init tail and its callbacks still run with IRQs enabled and are
+     * preemptible. A zero-window fix would need an SDK change.
+     * XINPUT-only: the DS4 boot path is unchanged. */
     usb_phy_request(USB_PHY_REQ_DISCONNECT, USB_PHY_OWNER_MAIN);
     usb_phy_process();
 #endif
