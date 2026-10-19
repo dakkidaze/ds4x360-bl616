@@ -1,0 +1,3 @@
+upstream: 42c20811
+local:    ec8c6e9d
+source:   /home/dakki/ds45/bouffalo_sdk (patched, git clean)

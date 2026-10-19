@@ -1,0 +1,23 @@
+#
+# Bouffalo SDK Configuration (main menu)
+#
+
+mainmenu "Bouffalo SDK Configuration"
+
+menu "Build Options"
+
+config CONFIG_STRICT
+    bool "Strict compilation (treat warnings as errors)"
+    default n
+    help
+      Enable -Werror to treat all compiler warnings as errors.
+      -Wall is always enabled; this option additionally makes
+      any warning a hard build failure.
+
+endmenu
+
+#
+# Include all other component Kconfigs
+#
+source "$BL_SDK_BASE/components/Kconfig"
+
