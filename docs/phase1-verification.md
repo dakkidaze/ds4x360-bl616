@@ -1,5 +1,10 @@
 # Phase 1 硬件验收记录（XUSB + UAC1 复合，1209:5D01）
 
+> **历史记录（身份已变更）**：本轮硬件验收是在 `0x5D01` 上完成的。当前身份为
+> `0x1209:0xD1CE`（见 `docs/identity-1209-d1ce.md`）。XUSB/音频描述符除 `idProduct`
+> 之外没有改动，但新 PID 仍需重新做一次枚举与驱动绑定检查；本文的枚举/绑定结论
+> 不能直接套用到 `0xD1CE`。
+
 日期：2026-10-19
 提交：`8787b3a`（身份 `eefcd55` + MS OS 防御修复）
 固件：`firmware/lctech616/ds4dongle-lctech616-xinput.bin`
@@ -48,9 +53,10 @@ Phase 1 通过：XUSB + UAC1 复合在 `1209:5D01` 身份下由 `usbccgp` 正常
 
 ## 6. 后续（不阻塞）
 
-- Oracle 上轮遗留的 mic FIFO 诊断：`ds4_usb_audio.c` 仍读 FIBC1（`0x1B4`），
-  XINPUT 下 mic 在 FIFO3（FIBC3，`0x1BC`）。只影响 `MIC_DIAG` 显示，不影响
-  推流；建议改成按端点索引推导。
+- ~~Oracle 上轮遗留的 mic FIFO 诊断~~ **已修复**：`ds4_usb_audio.c` 现在按 mic
+  端点推导 `FIBCn` 偏移（`DS4_USB_FIFO_BC_OFF(ep)`）：DS4 mic `0x82` → idx2 →
+  `0x1B4`，XINPUT mic `0x84` → idx4 → `0x1BC`，并有编译期 `_Static_assert`
+  校验两个 persona 的取值。该诊断只影响 `MIC_DIAG` 显示，不影响推流。
 - 自检工具对复合配置仍是源码模拟（运行时拼接），可后续做 C host harness 或
   真机抓取校验。
 - DS4 persona 在本仓库只是参考副本，不是出货目标；原 `ds4dongle-bl618` 与 SDK

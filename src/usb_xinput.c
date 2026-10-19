@@ -2,7 +2,7 @@
  * XUSB (Xbox 360 wired controller) persona.
  *
  * What this file owns:
- *   - the USB device/configuration/string descriptors for 1209:5D01 (no root
+ *   - the USB device/configuration/string descriptors for 1209:D1CE (no root
  *     hardware ID matches xusb22.inf; interface 0 binds xusb22 through the
  *     MS OS 1.0 compatible ID XUSB10);
  *   - the MS OS 1.0 descriptor set: string 0xEE, vendor code 0x20, 40-byte

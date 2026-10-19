@@ -9,7 +9,7 @@
  * Phase 2: the 20-byte input report is produced by src/xinput_map.c from the
  * DS4 state block; this module only frames it and drives the OUT callbacks.
  *
- * The identity is pid.codes 0x1209:0x5D01, which xusb22.inf does not match by
+ * The identity is pid.codes 0x1209:0xD1CE, which xusb22.inf does not match by
  * root hardware ID. Windows therefore enumerates the composite device with
  * usbccgp and binds xusb22 to interface 0 through the MS OS 1.0 compatible ID
  * USB\MS_COMP_XUSB10 (string 0xEE + vendor request 0x20, wIndex 4). The XUSB
@@ -21,13 +21,13 @@
  */
 
 #define USB_XINPUT_VID 0x1209 /* pid.codes shared VID */
-#define USB_XINPUT_PID 0x5D01 /* XUSB subclass 0x5D + protocol 0x01 */
+#define USB_XINPUT_PID 0xD1CE /* pid.codes 0xD1CE, hexspeak "DICE" */
 
 /*
  * bcdDevice. Windows caches device state per VID+PID+bcdDevice in
  * HKLM\SYSTEM\CurrentControlSet\Control\usbflags, so EVERY descriptor change
  * must increment this. 0x0200 = first XUSB descriptor revision,
- * 0x0201 = 1209:5D01 identity + MS OS 1.0 XUSB10 compatible ID.
+ * 0x0201 = 1209:D1CE identity + MS OS 1.0 XUSB10 compatible ID.
  */
 #define USB_XINPUT_BCD_DEVICE 0x0201
 

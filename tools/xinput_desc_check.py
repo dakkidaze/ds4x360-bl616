@@ -416,7 +416,7 @@ def main():
     pid = dev[10] | (dev[11] << 8)
     bcd = dev[12] | (dev[13] << 8)
     check(vid == 0x1209, "idVendor == 0x1209", f"0x{vid:04X}")
-    check(pid == 0x5D01, "idProduct == 0x5D01", f"0x{pid:04X}")
+    check(pid == 0xD1CE, "idProduct == 0xD1CE", f"0x{pid:04X}")
     check(bcd == values.get("USB_XINPUT_BCD_DEVICE"),
           "bcdDevice == USB_XINPUT_BCD_DEVICE", f"0x{bcd:04X}")
     check(dev[16] == 0x00, "iSerialNumber == 0 (no serial, like real pad)")
@@ -424,7 +424,7 @@ def main():
 
     # ---- MS OS 1.0 descriptor set (source level, both --audio modes) ----
     # The host only fetches it when the root device has no device-ID INF
-    # match, which is the whole point of 1209:5D01: usbccgp enumerates the
+    # match, which is the whole point of 1209:D1CE: usbccgp enumerates the
     # composite device and interface 0 binds xusb22 via USB\MS_COMP_XUSB10.
     print("MS OS 1.0 descriptor (source)")
     str_tokens = extract_array(ctext, "msosv1_string")

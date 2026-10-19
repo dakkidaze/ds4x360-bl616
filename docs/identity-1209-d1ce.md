@@ -1,4 +1,4 @@
-# 身份切换：VID 0x1209 / PID 0x5D01 + MS OS XUSB10
+# 身份切换：VID 0x1209 / PID 0xD1CE + MS OS XUSB10
 
 日期：2026-10-19
 依据：`docs/phase1-status.md` 的驱动归属结论、`docs/pid-codes-1209.md` 的
@@ -7,10 +7,11 @@
 ## 决策
 
 - **VID**：`0x1209`（pid.codes 共享 VID）
-- **PID**：`0x5D01`（抓取时未分配；XUSB 子类 0x5D + 协议 0x01）
+- **PID**：`0xD1CE`（hexspeak "DICE"；pid.codes `0x1209:0xD1CE`）
 - **bcdDevice**：`0x0201`（复合配置变更，从 0x0200 递增）
-- 正式分发前需在 pid.codes 申请 `0x1209:5D01`；在此之前按本地/实验用途使用。
+- 正式分发前需在 pid.codes 申请 `0x1209:0xD1CE`；在此之前按本地/实验用途使用。
 - DS4 persona（`054C:09CC`）不变。
+- 更早选择过 `0x5D01`（XUSB 子类 0x5D + 协议 0x01 的联想），已被 `0xD1CE` 取代。
 
 ## 为什么需要
 
@@ -53,7 +54,7 @@ UAC1 复合功能拿不到音频驱动。换成无根 INF 匹配的 VID/PID 后�
 
 - `src/usb_xinput.h`：VID/PID/BCD 宏；MS OS vendor code。
 - `src/usb_xinput.c`：msosv1 string/compat blob/descriptor；挂到 `usb_desc`。
-- `tools/xinput_desc_check.py`：期望的 VID/PID 改为 `1209:5D01`、bcdDevice
+- `tools/xinput_desc_check.py`：期望的 VID/PID 改为 `1209:D1CE`、bcdDevice
   `0x0201`；增加 msosv1 string 长度/vendor code/compat ID 的基本校验
   （至少：40 字节、`XUSB10`、bFirstInterfaceNumber=0）。
 - 其他 Phase 1 复合逻辑不动。
@@ -66,6 +67,6 @@ UAC1 复合功能拿不到音频驱动。换成无根 INF 匹配的 VID/PID 后�
    - 父设备：USB Composite Device（usbccgp）
    - 子设备：Xbox 360 Controller for Windows（xusb22，靠 `USB\MS_COMP_XUSB10`）
    - 子设备：USB Audio Device（usbaudio）
-   - 硬件 ID：`USB\VID_1209&PID_5D01&REV_0201`
+   - 硬件 ID：`USB\VID_1209&PID_D1CE&REV_0201`
 4. 若 Windows 仍不拆复合或 XUSB 子设备不绑，回退检查 msosv1 描述符与
    `wIndex=4` 请求（UsbTreeView / USB 抓包）。

@@ -1,5 +1,9 @@
 # Phase 1 状态
 
+> **历史记录（身份已变更）**：本轮验收使用 `0x5D01`；当前身份为 `0x1209:0xD1CE`
+> （见 `docs/identity-1209-d1ce.md`）。描述符除 `idProduct` 外未改，但 `0xD1CE`
+> 需要重新做枚举/绑定验收，下文记录仅对应 `0x5D01`。
+
 日期：2026-10-19
 **更新：Phase 1 已通过硬件验收**（`1209:5D01`，XUSB + UAC1 复合，
 `usbccgp`/`xusb22`/`usbaudio` 均绑定成功；详见 `docs/phase1-verification.md`）。

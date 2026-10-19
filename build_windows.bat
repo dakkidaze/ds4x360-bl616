@@ -35,7 +35,7 @@ rem    GAMEPAD=0          ds4dongle-<board>-nogp.bin
 rem    both               ds4dongle-<board>-noaudio-nogp.bin
 rem ============================================================
 
-if "%BL_SDK_BASE%"=="" set "BL_SDK_BASE=%~dp0..\bouffalo_sdk"
+if "%BL_SDK_BASE%"=="" set "BL_SDK_BASE=%~dp0third_party\bouffalo_sdk"
 if "%TOOLCHAIN_PATH%"=="" set "TOOLCHAIN_PATH=%USERPROFILE%\Desktop\toolchain_gcc_t-head_windows"
 if "%BOARD_TYPE%"=="" set "BOARD_TYPE=lctech616"
 if "%USB_SPEED%"=="" set "USB_SPEED=fs"

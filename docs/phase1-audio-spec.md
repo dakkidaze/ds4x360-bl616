@@ -1,8 +1,10 @@
 # Phase 1 规格：XINPUT + UAC1 音频复合设备
 
-状态：实施中。身份保持 `045E:028E`（微软 VID/PID，本地/实验用途），不做
-MS OS 兼容 ID 链。Phase 0/2 已通过硬件验收（`docs/phase0-verification.md`、
-`docs/phase2-verification.md`）。
+状态：**已完成（历史规格，Phase 1 已通过硬件验收）**。XUSB + UAC1 复合在
+`1209:5D01` 身份下通过验收（`usbccgp` → `xusb22` + `usbaudio`，见
+`docs/phase1-verification.md`）。下文保留当时的规格文本；身份一度使用
+`045E:028E`（微软 VID/PID，仅本地/实验，且不做 MS OS 兼容 ID 链），之后切换为
+`1209:5D01` 并加入 MS OS 兼容 ID 链。
 
 ## 1. 目标与布局
 

@@ -869,21 +869,31 @@ static void spk_recovery_step(void)
 }
 
 
-/* FIFO occupancy diagnostics (FIBC1 = mic FIFO, 0x1B4). Read just before each
- * new VDMA write: 0 means the host drained the previous packet; non-zero
+/* FIFO occupancy diagnostics: follow the mic endpoint's FIFO. Read just before
+ * each new VDMA write: 0 means the host drained the previous packet; non-zero
  * means the DCIA never put it on the bus (it accumulates up to the FIFO
  * size). */
 volatile uint32_t g_mic_fifo_bc = 0;
 volatile uint32_t g_mic_fifo_bc_max = 0;
 
-#define DS4_USB_FIBC1_OFF 0x1B4u
+/* FIBC register for an endpoint index: FIBC0 at 0x1B0, one word per index.
+ * DS4: mic 0x82 -> idx2 -> 0x1B4. XINPUT: mic 0x84 -> idx4 -> 0x1BC. */
+#define DS4_USB_FIFO_BC_OFF(ep) (0x1B0u + 4u * (((ep) & 0x7Fu) - 1u))
+#define DS4_USB_MIC_FIBC_OFF    DS4_USB_FIFO_BC_OFF(DS4_AUDIO_EP_IN)
+
+#if defined(DS4_FEATURE_XINPUT)
+_Static_assert(DS4_USB_MIC_FIBC_OFF == 0x1BCu, "XINPUT mic FIFO offset");
+#else
+_Static_assert(DS4_USB_MIC_FIBC_OFF == 0x1B4u, "DS4 mic FIFO offset");
+#endif
+
 #ifndef USB_BASE
 #define USB_BASE 0x20072000u
 #endif
 
 uint32_t usb_audio_mic_fifo_bc(void)
 {
-    return *(volatile uint32_t *)((0x20072000u) + 0x1B4u) & 0x7FFu;
+    return *(volatile uint32_t *)(USB_BASE + DS4_USB_MIC_FIBC_OFF) & 0x7FFu;
 }
 
 /* ---- Platform callbacks for the session core ----
@@ -915,10 +925,10 @@ static int plat_ep_arm_spk(void)
 
 static int plat_submit_mic(const int16_t *buf, uint32_t samples)
 {
-    /* FIFO occupancy snapshot before re-arming: 0 = host drained the last
-     * packet, non-zero = the DCIA never transmitted it (accumulating).
-     * Diagnostic counters only. */
-    uint32_t bc = *(volatile uint32_t *)(USB_BASE + DS4_USB_FIBC1_OFF) & 0x7FFu;
+    /* Mic FIFO occupancy snapshot before re-arming (FIBCn follows the mic
+     * endpoint): 0 = host drained the last packet, non-zero = the DCIA never
+     * transmitted it (accumulating). Diagnostic counters only. */
+    uint32_t bc = *(volatile uint32_t *)(USB_BASE + DS4_USB_MIC_FIBC_OFF) & 0x7FFu;
     g_mic_fifo_bc = bc;
     if (bc > g_mic_fifo_bc_max)
         g_mic_fifo_bc_max = bc;

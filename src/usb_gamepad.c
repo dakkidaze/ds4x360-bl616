@@ -242,7 +242,7 @@ static const uint8_t *desc_device_cb(uint8_t speed)
 {
     (void)speed;
 #ifdef DS4_FEATURE_XINPUT
-    /* XUSB persona: 1209:5D01, no serial number. */
+    /* XUSB persona: 1209:D1CE, no serial number. */
     return usb_xinput_device_desc();
 #else
     device_desc[16] = config_usb_sn() ? 0x03 : 0x00;

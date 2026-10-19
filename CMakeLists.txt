@@ -72,7 +72,7 @@ if(DS4_XINPUT_ENABLED)
         src/usb_xinput.c
         src/xinput_map.c
     )
-    message(STATUS "Feature XINPUT: enabled (XUSB 1209:5D01, DS4 HID persona off; audio follows AUDIO - enabled by default, AUDIO=0 for XUSB-only)")
+    message(STATUS "Feature XINPUT: enabled (XUSB 1209:D1CE, DS4 HID persona off; audio follows AUDIO - enabled by default, AUDIO=0 for XUSB-only)")
 else()
     if("$ENV{GAMEPAD}" STREQUAL "0")
         add_compile_definitions(DS4_NO_GAMEPAD=1)

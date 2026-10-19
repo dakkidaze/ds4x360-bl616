@@ -1,396 +1,245 @@
-# DS5Dongle BL618
+# ds4x360-bl616 —— DualShock 4 → Xbox 360（XUSB）适配器
 
-基于 BL616/BL618 的 DualSense 无线手柄适配器。将 DualSense / DualSense Edge 手柄通过蓝牙经典（BR/EDR）HID 连接到 BL616/BL618，再通过 USB HID 透传给主机，主机端呈现为标准有线 DualSense（VID 054C / PID 0CE6）或 DualSense Edge（PID 0DF2）。Steam、SDL、PS Remote Play 等均可直接识别。
+[English](README.md) · [编译教程](BUILD_CN.md) · [刷固件教程](FLASHING_CN.md)
 
-移植自 [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle)（Raspberry Pi Pico 2W 版本）：BT 栈从 BTstack 迁移至 Bouffalo SDK（Zephyr 内核），USB 栈从 TinyUSB 迁移至 CherryUSB。
+基于 BL616/BL618 的适配器：把 **DualShock 4（DS4）** 通过蓝牙经典（BR/EDR）HID 接入，
+再向主机呈现为 **Xbox 360 有线手柄**（XUSB，VID:PID `1209:D1CE`），并带一个 **UAC1 音频复合**
+功能。Windows 由 `usbccgp` 拆分为 `xusb22`（XInput）+ `usbaudio`，无需装驱动。
 
-> **非官方项目** —— 与索尼互动娱乐（Sony Interactive Entertainment）无关，亦未获其认可。"DualSense"、"DualSense Edge" 和 "PlayStation" 是索尼互动娱乐的商标。USB VID/PID（054C:0CE6 / 0DF2）仅用于模拟，使主机将其识别为有线手柄；使用风险自负。
+打补丁的 Bouffalo SDK 已 vendor 在 `third_party/bouffalo_sdk`，克隆后不需要另外下载 SDK。
+裁剪/vendor 的做法见 [docs/SDK_VENDORING_CN.md](docs/SDK_VENDORING_CN.md)，每一处本地补丁见
+`SDK_CHANGES.md`。
+
+> **非官方项目。** 与索尼、微软均无关联，也未获其认可。"DualShock"、"Xbox" 是各自权利人的商标。
+> `1209:D1CE` 是本地/实验用的 pid.codes 风格 VID/PID；正式分发前请申请正式分配。
+
+## 变体 / 编译 / 烧录
+
+本仓库交付的是 XInput persona。发布两个变体；DS4 persona 仅作**参考**（回归对照），不发布。
+
+| 变体 | 编译 | 主机看到 |
+|---|---|---|
+| `xinput`（**默认**） | `./build.sh` | XUSB 手柄 `1209:D1CE` + UAC1 音频 |
+| `xinput-noaudio` | `XINPUT=1 AUDIO=0 ./build.sh` | 仅 XUSB 手柄，无音频功能 |
+
+- **编译**：[BUILD_CN.md](BUILD_CN.md) / [BUILD.md](BUILD.md) —— vendor SDK、
+  `./setup_toolchain.sh` 自动下载 Xuantie 工具链、Linux/WSL2 命令、原生 Windows 受限说明。
+- **烧录**：[FLASHING_CN.md](FLASHING_CN.md) / [FLASHING.md](FLASHING.md) —— ROM ISP
+  `349b:6160`、`BLFlashCommand --config=flash_prog_cfg-<variant>.ini`、Dev Cube 备选。
+- `./release.sh` 把两个变体构建到 `release/`（固件、烧录配置、许可文件、`SOURCE.txt`、
+  `SHA256SUMS`）。
+- DS4 参考构建：`XINPUT=0 ./build.sh` —— 可以编译，但不是产品目标。
 
 ## 支持的开发板
 
-| 开发板 | 芯片 | USB | LED | 调试 |
-|--------|------|-----|-----|------|
-| **LCTech BL616**（默认） | BL616 QFN32 | Type-C 原生 | 1x 蓝色（GPIO27） | 外接 USB-TTL |
-| **Ai-M61-32S-Kit** | BL618 QFN56 | GPIO37/38 飞线 | RGB + 白色（4 LED） | Type-C CH340 |
-| **Sipeed M0S Dock** | BL616 QFN32 | Type-C 原生 | 2x 红色（GPIO27/28） | 外接 USB-TTL |
+| 开发板 | 芯片 | 状态 |
+|---|---|---|
+| **LCTech BL616**（默认） | BL616 QFN32 | **已做硬件验收**（XUSB + UAC1 复合） |
+| Ai-M61-32S-Kit | BL618 QFN56 | 可编译；硬件未测 |
+| Sipeed M0S Dock | BL616 QFN32 | 可编译；硬件未测 |
 
-> **默认构建目标为 LCTech BL616。** `build_macos.sh`（以及 `build_lctech616.sh` 包装脚本）默认即为它构建；其他开发板请使用 `BOARD_TYPE=aim61` 或 `BOARD_TYPE=m0sdock`。
-
-各开发板的 LED 引脚与 USB 拓扑不同，均在编译期通过 `board_config.h` 处理。
-
-## 硬件要求
-
-- **LCTech BL616**、**Ai-M61-32S-Kit** 或 **Sipeed M0S Dock** 开发板
-- **DualSense 手柄**（标准版 0CE6）或 **DualSense Edge**（0DF2，自动识别）
-- LCTech BL616 / M0S Dock：仅需 USB-C 线（原生 USB）
-- Ai-M61-32S-Kit：需 **USB 数据线**（剪线后接 USB_DM/USB_DP 排针）
-- LCTech / M0S Dock 串口调试：**USB-TTL 适配器**（CH340/CH341，3.3V）
+只有 LCTech BL616 在真实硬件上验收过。其他板型能编译，但 USB 接线、LED 行为和音频时序
+未经验证。
 
 ### USB 接线（仅 Ai-M61-32S-Kit）
 
-板载 Type-C 口是 UART 桥接（烧录/调试用），原生 USB 需要从排针引出：
+板载 Type-C 是 UART 桥（调试/烧录用）。原生 USB 需要从排针飞线：
 
 ```
-Pin 37 (USB_DM) → USB D-（白色）
-Pin 38 (USB_DP) → USB D+（绿色）
-GND              → USB GND（黑色）
+Pin 37 (USB_DM) → USB D-（白）
+Pin 38 (USB_DP) → USB D+（绿）
+GND             → USB GND（黑）
 ```
 
-如果主机不通过 USB 供电，开发板需经 Type-C 口单独供电。
-
-> **LCTech BL616 / M0S Dock**：USB 经 Type-C 直连，无需飞线。
+LCTech BL616 / M0S Dock 直接用板载 Type-C 做原生 USB，无需接线。
 
 ## 快速开始
 
-### 1. 安装 Bouffalo SDK（必须使用本项目分支）
-
-> 官方 Bouffalo SDK **无法**用于本项目——缺少固件所需的 BT HID net_buf 池和 USB Audio 请求处理。必须使用本项目维护的 SDK 分支：
+### 1. 依赖
 
 ```bash
-git clone https://github.com/sqlCRT/bouffalo_sdk.git bouffalo_sdk
-```
+# Linux / WSL2（Ubuntu/Debian）
+sudo apt install -y build-essential cmake python3 curl xz-utils git
 
-构建脚本要求 SDK 位于 `../bouffalo_sdk`（与本仓库同级目录），直接使用该分支的 `master` 即可。该分支基于上游 v2.3.28，并针对 DS5Dongle BL618 做了针对性修改，详见其 README。
-
-### 2. 安装依赖
-
-```bash
 # macOS
-brew install cmake
-brew install make          # SDK 需要 GNU Make 4.0+
-
-# Linux (Ubuntu)
-sudo apt install cmake make
+brew install cmake make xz   # GNU Make >= 4.0（用 gmake）；xz 用于解压工具链
 ```
 
-### 3. 安装 RISC-V 工具链
+需要 CMake >= 3.15、GNU Make >= 4.0。
 
-BL616/BL618 使用 T-Head 扩展指令集，标准 `riscv64-elf-gcc` 无法使用。
+### 2. RISC-V 工具链
+
+SDK 需要 T-Head 扩展（`xtheade`、`zpsfoperand`），发行版或 Homebrew 的 `riscv64-elf-gcc`
+无法编译。`build.sh` 会查找已有的 Xuantie 工具链，找不到就通过 `./setup_toolchain.sh`
+下载一次（约 95 MB，SHA-256 校验）到 `third_party/toolchain/`（已 gitignore）。手动执行：
 
 ```bash
-# macOS ARM64 — 社区预编译 T-Head 工具链
-curl -L https://github.com/beckmx/bouffalo_labs_mac_toolchain/releases/download/v1.0/riscv64-unknown-elf-toolchain.tar.gz \
-  | tar xz -C ~/riscv-toolchain
-
-# Linux — SDK 自带工具链，或从 T-Head 官方下载
+./setup_toolchain.sh          # 幂等
+./setup_toolchain.sh --force  # 重装
 ```
 
-`build_macos.sh` 会自动在 `~/riscv-toolchain/toolchain/bin` 下查找工具链。
+也可以指定自己的工具链：`CROSS_COMPILE=/path/to/riscv64-unknown-elf- ./build.sh`。
 
-### 4. 编译
+### 3. 编译
 
 ```bash
-cd ds5dongle-bl618
+./build.sh                    # 默认：XUSB + UAC1 音频复合
+XINPUT=1 AUDIO=0 ./build.sh   # 仅 XUSB（诊断）
+XINPUT=0 ./build.sh           # 参考：DS4 persona（不发布）
 
-# LCTech BL616 — 默认
-bash build_macos.sh build      # 增量编译（-j 自动并行）
-bash build_macos.sh rebuild    # 清理后重新编译
-# 或：bash build_lctech616.sh rebuild
-
-# Ai-M61-32S-Kit
-BOARD_TYPE=aim61 bash build_macos.sh rebuild
-
-# Sipeed M0S Dock
-BOARD_TYPE=m0sdock bash build_macos.sh rebuild
-# 或：bash build_m0sdock.sh rebuild
-
-# USB 速度 — 仅 Full-Speed（12 Mbps，FS hub 与直连均可）。
-# 不支持 HS；USB_SPEED=hs 构建会被直接拒绝。
-
-# 其他命令
-bash build_macos.sh clean      # 仅清理
-bash build_macos.sh strip      # 删除 .o/.a 中间文件，缩小 build 目录
+./build.sh rebuild            # 清理后重编
+./build.sh clean              # 只清理
+./build.sh strip              # 删中间文件，保留固件
 ```
 
-- **默认开发板：LCTech BL616**（`BOARD_TYPE=lctech616`）。
-- **USB 速度：仅 Full-Speed（12 Mbps，FS hub 与直连均可）。不支持 HS。** 构建时会强制该模式，并拒绝 `USB_SPEED=hs`。
-- 切换 `BOARD_TYPE` 会自动触发一次干净重编（CMake 缓存不兼容）。
+- 默认板型 `BOARD_TYPE=lctech616`；可改为 `aim61` / `m0sdock`。
+- **USB 速度：只支持 Full-Speed（12 Mbps）**，`USB_SPEED=hs` 会被拒绝。
+- 产物：`firmware/lctech616/ds4dongle-lctech616-xinput.bin`（复合）和
+  `firmware/lctech616/ds4dongle-lctech616-noaudio-xinput.bin`，以及 `boot2_*.bin`、
+  `partition.bin`、`flash_prog_cfg.ini`。构建产物不进 git。
+- `DEBUG_CONSOLE=1` / `MIC_DIAG=1` 改变的是**行为**：`DEBUG_CONSOLE` 增加 UART 日志镜像 /
+  HID 0xB4 日志环，`MIC_DIAG` 启用麦克风诊断（并改变音频节拍）。它们同时生成 `-dbg` /
+  `-diag` 变体，不会覆盖发布文件名。`DEBUG_CONSOLE` 仅在非空且不等于 `0` 时生效。
 
-#### 构建组合
+### 4. 原生 Windows
 
-不带参数的构建就是发布候选。真实有线 DS4 本身带音频，因此默认形态是
-**音频 + 手柄** —— 没有 `AUDIO=1` 这种写法，音频默认开启，除非显式关闭。
-
-| # | 调用方式 | 构建内容 | 产物（`BOARD_TYPE=lctech616`） |
-|---|----------|----------|-------------------------------|
-| 1 | `bash build_macos.sh rebuild` | **发布候选** — UAC1 音频 + HID 手柄 | `firmware/lctech616/ds4dongle-lctech616.bin` |
-| 2 | `DEBUG_CONSOLE=1 bash build_macos.sh rebuild` | 发布功能 + HID Feature 0xB4 背后的 UART 日志镜像 | `firmware/lctech616/ds4dongle-lctech616-dbg.bin` |
-| 3 | `MIC_DIAG=1 bash build_macos.sh rebuild` | 发布功能 + 麦克风诊断 | `firmware/lctech616/ds4dongle-lctech616-diag.bin` |
-| 4 | `GAMEPAD=0 bash build_macos.sh rebuild` | 仅音频，不包含 HID 手柄接口 | `firmware/lctech616/ds4dongle-lctech616-nogp.bin` |
-| 5 | `AUDIO=0 bash build_macos.sh rebuild` | **仅诊断用** — 不含 UAC1 音频 | `firmware/lctech616/ds4dongle-lctech616-noaudio.bin` |
-
-- 默认固件（第 1 行）即发布候选：其 USB 描述符就是有线 DS4 的形态 —— 507 字节
-  HID 报告描述符，加上真实手柄才有的 UAC1 扬声器 OUT 与麦克风 IN 端点。音频仍需
-  在真实 DS4 硬件上完成验收，之后才能称为已交付。
-- 第 2、3 行是开发变体，各有独立文件名（`-dbg` / `-diag`），不会覆盖发布候选；发布产物只由第 1 行产生。
-- 只有 **非空且不为 `0`** 的 `DEBUG_CONSOLE` 才算启用：`DEBUG_CONSOLE=<空>` 与
-  `DEBUG_CONSOLE=0` 都构建发布候选。CMake、`build_macos.sh`、`build_windows.bat`
-  使用完全相同的判断；若脚本的 `-dbg` 标签与 CMake 的调试宏不一致，构建会直接
-  失败（因此调试固件绝不会被复制成发布文件名）。
-- `TOUCHPAD=1` / `GYRO=1` 仍会追加 `-tp` / `-gyro`；组合时按
-  `-noaudio`、`-dbg`、`-diag`、`-tp`、`-gyro`、`-nogp` 的顺序拼接
-  （例如 `-noaudio-nogp`，`DEBUG_CONSOLE=1 AUDIO=0` → `-noaudio-dbg`）。
-- 功能标签会进入自动清理的 build key，因此在默认构建与任一标签变体
-  （`AUDIO=0`、`GAMEPAD=0`、`DEBUG_CONSOLE=1`、`MIC_DIAG=1` 等）之间切换都会强制干净重编。
-
-产物位于 `firmware/{board}/ds4dongle-{board}.bin`（约 800KB），以及 boot2/partition 文件和 `flash_prog_cfg.ini`。编译产物已被 git 忽略 —— 如需分发预编译固件，建议附加到 GitHub Release。
-
-#### Windows 编译
-
-Windows 下先克隆 T-Head 工具链，然后使用仓库自带的脚本：
-
-```bat
-git clone https://gitee.com/bouffalolab/toolchain_gcc_t-head_windows.git
-
-build_windows.bat rebuild      rem LCTech BL616，Full-Speed，音频 + 手柄
-build_windows.bat              rem 增量编译
-build_windows.bat flash COM5   rem 串口烧录
-```
-
-USB 输出**仅 Full-Speed（12 Mbps，FS hub 与直连均可）。不支持 HS。** 音频与 macOS 脚本一致默认开启；`AUDIO=0` 生成诊断用的 `-noaudio`，`GAMEPAD=0` 生成 `-nogp`。
-
-脚本默认要求 DS5Dongle BL618 SDK 分支位于 `..\bouffalo_sdk`（见步骤 1），工具链位于 `%USERPROFILE%\Desktop\toolchain_gcc_t-head_windows`。可通过环境变量 `BL_SDK_BASE` / `TOOLCHAIN_PATH` 覆盖；其他开发板用 `BOARD_TYPE=aim61` / `BOARD_TYPE=m0sdock`。
+原生 Windows **不是开箱即用**：裁剪后的 SDK 不再包含 `tools/make`、`tools/cmake`、
+`tools/ninja`，而 `project.build` 在 Windows 分支硬编码 `tools/cmake/bin/cmake.exe`。
+请用 **WSL2**（推荐），或自备系统 make/CMake 并传 `CMAKE=cmake`，或把 `BL_SDK_BASE`
+指向完整 SDK。详见 [BUILD_CN.md](BUILD_CN.md) §2.2。
 
 ### 5. 烧录
 
-#### LCTech BL616 — Dev Cube（UART/ISP 模式）
+简版（已验证路径）：拔下板子 → 按住 **BOOT** → 插入板子的 USB 口 → 等 `349b:6160` 串口出现 →
+用对应变体的 ini 运行 `BLFlashCommand`。完整说明（含 WSL2/usbipd 与 Dev Cube 备选）见
+[FLASHING_CN.md](FLASHING_CN.md) / [FLASHING.md](FLASHING.md)。
 
-1. 先完成编译——构建脚本会把 `ds4dongle-lctech616.bin`、`boot2_bl616_isp_release_v8.1.8.bin` 和 `partition_cfg_4M_nosec.toml` 输出到 `firmware/lctech616/`。
-2. 按住 LCTech BL616 的 **BOOT** 键，然后通过 USB-C 插入电脑，保持按住直到开发板进入 UART（ISP）下载模式。
-3. 打开 [Bouffalo Lab Dev Cube](https://dev.bouffalolab.com/download)，选择芯片 **BL616**，使用 **ISP（UART）烧录模式**。
-4. 选择开发板对应的串口，然后加载以下文件：
-   - 分区表：`firmware/lctech616/partition_cfg_4M_nosec.toml`
-   - Boot2：`firmware/lctech616/boot2_bl616_isp_release_v8.1.8.bin`
-   - 固件：`firmware/lctech616/ds4dongle-lctech616.bin`
-5. 开始烧录。
+## 使用
 
-> 请使用 `_nosec` 分区表（`partition_cfg_4M_nosec.toml`），不要使用 `partition_cfg_4M.toml`。
+1. 把板子的 Type-C 接到主机（供电 + 数据）。
+2. DS4 进入配对模式：按住 **PS + Share/Create**，直到灯条闪烁。
+3. 主机出现 "Xbox 360 Controller for Windows" 以及一个音频设备（`1209:D1CE` 复合设备）。
+4. 板载 LED 显示连接状态（见下表）。
 
-也可以直接用构建脚本烧录：
+### LED 状态（LCTech BL616，GPIO27 单蓝灯）
 
-```bash
-bash build_macos.sh flash /dev/tty.usbserial-xxx
-```
-
-其他开发板流程相同，使用 `firmware/{board}/` 下对应的文件。
-
-## 在 Windows 上读取日志
-
-日志在任何构建（包括 release）里始终输出到调试串口 UART。`DEBUG_CONSOLE`
-构建会额外把同样的文本存进 64 KB 内存环形缓冲，并通过 HID Feature Report
-**0xB4** 提供给主机读取。
-
-```bash
-DEBUG_CONSOLE=1 bash build_lctech616.sh rebuild
-python3 tools/hidlog.py 60 dongle.log     # 轮询 0xB4 并追加写入日志
-```
-
-Windows 上等价的一次读取命令：
-
-```bat
-hidapitester --vidpid 0x054C/0x09CC --open --length 64 --read-feature 0xB4 --close
-```
-
-dongle 只暴露 **一个** 顶层 HID collection（DS4 手柄的 application
-collection），因此上面的 VID/PID 打开必然落在拥有 0xB4 的那个 collection
-上——不存在第二个可被误选的 collection。`tools/hidlog.py` 还会额外按
-Usage Page `0x01` / Usage `0x05` 显式匹配该 collection，而不是取"第一个
-匹配的接口"；若将来某个构建暴露了多个 collection，请按 usage page/usage
-选择手柄 collection，不要只依赖 VID/PID。
-
-USB HID 主机只会接受 **报告描述符里声明过** 的 Feature Report；Windows 对于
-未声明的报告 ID 会直接丢弃 GET_REPORT。因此 `DEBUG_CONSOLE` 构建**不新增**任何
-报告，而是复用报告 **0xB4**——真实 DS4 v2 描述符本来就声明了它：厂商自定义
-usage page `0xFF80`、usage `0x55`、63 字节数据 / 504 bits，线上长度 64 字节
-（含报告 ID）。固件用控制台环形缓冲的内容应答（报告 ID + 最多 63 字节日志，
-不足补零到恰好 64 字节）。
-
-0xB4 可以安全复用：它是真实 DS4 报告，本固件没有把它用于其它用途，Linux
-hid-sony 正常工作时不会用到它，而且这个替换由编译期开关控制——release 构建
-对 0xB4 保持原有的 fall-through 行为不变。
-
-报告描述符在任何构建里都是 **507 字节**：release 与 `DEBUG_CONSOLE` 逐字节
-一致，内容与 `wDescriptorLength` 都相同。（早前版本额外声明了一个仅调试用的
-厂商报告，把描述符撑到 525 字节、越过了 512 字节边界，怀疑正是 Windows 上
-HID 枚举失败的原因；该实现已删除。）主机、游戏和反作弊驱动看到的是一只手柄，
-而不是一个 dongle。0xB4 读取器仅存在于调试构建，这是刻意的取舍。
-
-## 使用方法
-
-1. 将 LCTech BL616 开发板的 Type-C 口连接到目标主机（供电 + USB 数据）；如需串口调试，另接 USB-TTL 适配器（CH340/CH341，3.3V）
-2. 手柄进入配对模式（同时长按 **PS + Create** 3 秒，灯条闪烁）
-3. 观察板载蓝色 LED 状态（见下方 LED 状态表）
-4. 主机应识别出 "DualSense Wireless Controller"
-
-> **Ai-M61-32S-Kit 备注：** 其 Type-C 口仅为 UART 桥接（烧录/调试用），原生 USB 需从排针引出（USB_DM/USB_DP/GND）接到目标主机，见上方"USB 接线"。
-
-### LED 状态指示
-
-LCTech BL616 为单颗蓝色 LED（GPIO27），不同状态以闪烁节奏区分：
-
-| 状态 | 模式（单颗蓝灯） |
-|------|------------------|
-| 空闲 / 等待配对 | 慢闪（~1Hz） |
-| 扫描中 | 快闪（~3Hz） |
+| 状态 | 表现 |
+|---|---|
+| 空闲 / 等待配对 | 慢闪（约 1 Hz） |
+| 扫描中 | 快闪（约 3 Hz） |
 | 已连接 | 常亮 |
-| 刚断开 | 闪烁（~1Hz）约 3 秒，随后回到空闲慢闪 |
-| 电量 ≤20%（放电中） | 中速闪（~1.7Hz） |
-| 电量 ≤10%（放电中） | 快闪（~3Hz） |
-| 自动熄灭 | 1 分钟后熄灭（默认开启；电量告警不受影响） |
-| 事件确认 | 闪一次 |
-| 清除配对 | 连闪三次 |
-
-> **Ai-M61-32S-Kit 备注（RGB + 白色 LED）：** 空闲 = 紫色慢闪（1Hz）；扫描 = 紫色快闪（~3Hz）；已连接 = 绿色常亮；刚断开 = 红色慢闪，约 3 秒后自动转为紫色；电量 ≤20% = 绿黄色中速闪；电量 ≤10% = 红色中速闪；事件确认 = 蓝色闪一次；清除配对 = 蓝色连闪三次。
->
-> **Sipeed M0S Dock 备注（两颗红色 LED，GPIO27/28）：** LED0（靠近 Type-C）用于空闲/扫描闪烁，LED1 在连接后常亮；断开 = 两颗同步闪烁；电量预警 = LED0 快闪；电量严重不足 = 两颗闪烁。
+| 刚断开 | 闪约 3 秒（约 1 Hz），随后回到空闲 |
+| 电量 ≤20%（放电中） | 中速闪（约 1.7 Hz） |
+| 电量 ≤10%（放电中） | 快闪（约 3 Hz） |
+| 自动熄灭 | 1 分钟后熄灭 |
+| 事件确认 | 单闪 |
+| 清除配对 | 三连闪 |
 
 ### BOOT 按键手势
 
-| 手势 | 功能 |
-|------|------|
-| **单击** | 切换到下一个已配对的手柄（最多记忆 8 个） |
-| **双击** | 断开当前手柄 + 重新扫描配对新手柄（保留 link key） |
-| **长按 3 秒** | 清除所有配对 + 重新扫描（三次蓝闪确认） |
+| 手势 | 动作 |
+|---|---|
+| 单击 | 切换到下一个已记忆的手柄（最多 8 个） |
+| 双击 | 断开当前手柄并扫描新柄（保留配对） |
+| 长按 3 秒 | 清除全部配对并开始扫描（三连闪） |
 
-## 功能特性
+## 功能
 
-### 已实现
+### 已实现（XInput persona）
 
-- BT Classic HID Host：Inquiry、SDP、L2CAP、SSP 自动配对
-- 完整输入透传：摇杆、按键、扳机、陀螺仪、加速度计、触摸板、电量
-- 完整输出透传：震动、RGB 灯条、玩家指示灯、自适应扳机
-- 双向音频透传：UAC1 4ch 48kHz OUT → Opus 编码 → BT 0x39 双帧报告（547B，扬声器/耳机）；BT 麦克风 Opus → 解码 → UAC1 2ch 48kHz IN
-- HD 触觉反馈：USB Audio Ch2/Ch3 → 16:1 降采样 → BT 0x92 触觉 tag
-- DualSense Edge 完整支持：自动识别 → unlock 握手 → profile 预取 → 437B 描述符，PID 自动切换（0DF2）
-- 多手柄记忆：最多记忆 8 个已配对手柄，单击按键快速切换
-- 手柄主动回连：L2CAP 服务端注册（被动模式）
-- 稳健重连：周期性扫描重试（~30s）、连接看门狗（3s 无输入检测）、链路监督超时（5s）、陈旧 ACL 清理的系统复位兜底
-- 空闲超时：可配置 0–60 分钟自动断开（默认 30 分钟）
-- PS 快捷键：短按 → Win+G，长按 → Win+Tab
-- 轮询率可配置：250Hz / 500Hz / 实时档（~750Hz，跟随 BT 报告率）
-- 按键映射：可将手柄任意按键重映射为其他手柄按键（Feature Report 0xFB）
-- MuteLight：通过手柄静音键开关麦克风指示灯
-- USB 远程唤醒：6 态 FSM + Boot Keyboard + 挂起 5 秒后自动关机
-- USB 隐身模式：可配置为手柄连接前不枚举 USB 设备
-- 手柄灯条自定义颜色（默认白色）+ 板载 RGB 状态灯
-- USB 序列号：eFuse 芯片唯一 ID（可配置，默认开启）
-- 扳机电机功率限制：可配置 0–10 档
-- 音量锁定：阻止主机修改手柄扬声器/耳机音量
-- LED 自动熄灭：常亮 LED 1 分钟后关闭（默认开启；电量告警不受影响）
-- 电量告警：≤20% 绿黄闪预警，≤10% 红色闪严重告警
-- 多开发板支持：LCTech BL616（默认）、Ai-M61-32S-Kit、Sipeed M0S Dock —— 编译期板型选择
-- 构建期日志级别控制（`LOG_LEVEL` 0–3）
-- FreeRTOS 多任务架构（BT / USB / Audio / Mic）
+- 蓝牙经典 HID Host：inquiry、SDP、L2CAP、SSP 配对、重连看门狗。
+- DS4 输入 → XUSB 20 字节报告：按键、十字键、摇杆（径向死区、Y 轴取反）、模拟扳机、
+  Guide（= PS 键）。
+- XUSB 输出 → DS4：震动（强/弱）和 LED 命令经 BT `0x05` 下发。
+- 触摸板修饰键连发：按住触摸板 + 目标键（A/B/X/Y/LB/RB）≥400 ms → 15 Hz 脉冲；
+  短按原样透传。
+- 断连发中立报告（不会卡键）；4 ms 节拍（主机实测约 126 Hz）。
+- 复合构建提供双向 UAC1 音频：32 kHz 立体声扬声器输出、16 kHz 麦克风输入。
+- 多手柄记忆（最多 8 个配对）与 BOOT 手势切换。
+- 编译期选择板型（LCTech BL616 / Ai-M61-32S-Kit / M0S Dock）。
 
 ### 已知限制
 
-| 项目 | 说明 |
-|------|------|
-| 单手柄在线 | 同一时刻只能连接一个手柄；最多记忆 8 个配对（单击切换） |
+| 项 | 说明 |
+|---|---|
+| 单活动手柄 | 同一时间只连接一个 DS4；最多记忆 8 个配对。 |
+| XUSB 报告集 | XUSB 报告不含触摸坐标、陀螺仪、电量；触摸板只作连发修饰键。 |
+| 音频 | 只有 UAC1 复合；无 HD 触觉、无自适应扳机音频通路。 |
+| `1209:D1CE` | 开发用 VID/PID；正式分发前请申请正式分配。 |
 
-### 手柄功能兼容性
+### DS4 persona（仅参考）
 
-USB 端提供 DualSense 兼容的 HID 描述符（DS 与 Edge 自动切换；标准有线布局 + dongle 配置 Feature Report 0xF6–0xF9 / 0xFB），主机将其视为有线手柄。
+本仓库也能编译原始 DS4 HID persona（`XINPUT=0`），用于回归对比。它**不是产品**：
+`release.sh` 不构建它，本仓库也不对它做硬件验收；保留它只是为了验证共享 USB/BT 改动。
+上游的 DS4 HID 报告布局、Feature report 以及 DualSense 时代的材料都不适用于 XInput 构建。
 
-| 功能 | 数据路径 | 支持 |
-|------|----------|------|
-| 摇杆 / 按键 / 扳机 | HID Input 透传 | 是 |
-| 陀螺仪 / 加速度计 | HID Input 透传 | 是 |
-| 触摸板 | HID Input 透传 | 是 |
-| 电池电量 | HID Input 透传 | 是（另有板载 LED 低电量告警） |
-| **自适应扳机** | HID Output SetStateData | 是 |
-| **震动** | HID Output SetStateData | 是 |
-| RGB 灯条 / 玩家指示灯 | HID Output SetStateData | 是 |
-| **HD 触觉反馈** | USB Audio Ch2/Ch3 → BT 0x92 | 是 |
-| 手柄扬声器 | USB Audio Ch0/Ch1 → Opus → BT 0x39 tag 0x93 | 是 |
-| 手柄麦克风 | BT Input → Opus 解码 → USB Audio IN | 是 |
-| 3.5mm 耳机（输出） | USB Audio → Opus → BT 0x39 tag 0x96 | 是 |
-| 麦克风静音灯 | BT Input 静音键 → MuteLight 控制 | 是 |
+## 技术说明
 
-## 配置项
+### XUSB 输入报告（20 字节）
 
-配置通过 `bt_settings` 持久化，经 USB Feature Report 0xF6–0xF9 读写，可通过网页免重编译修改（见"网页配置"）。主要配置项（默认值）：
+| 偏移 | 内容 |
+|---|---|
+| 0 | `0x00` |
+| 1 | `0x14`（报告长度） |
+| 2–3 | 按钮字，`uint16` LE（`& 0xF7FF`） |
+| 4 | LT（0–255） |
+| 5 | RT（0–255） |
+| 6–7 | LX `int16` LE |
+| 8–9 | LY `int16` LE（向上为正） |
+| 10–11 | RX `int16` LE |
+| 12–13 | RY `int16` LE |
+| 14–19 | 保留（`0`） |
 
-| 配置项 | 默认值 |
-|--------|--------|
-| 手柄模式 | Auto（DS5 / Edge / Auto） |
-| 轮询率 | 250Hz（250 / 500 / 实时 ~750Hz） |
-| 空闲自动断开 | 30 分钟（0–60，0 = 关闭） |
-| LED 自动熄灭 | 开启（1 分钟后） |
-| 灯条自定义颜色 | 白色 |
-| USB 序列号 | 开启 |
-| USB 隐身模式 | 关闭 |
-| PS 快捷键 | 关闭 |
-| USB 远程唤醒 | 关闭 |
-| 触觉增益 | 1.0（1.0–2.0） |
-| 扳机电机限制 | 0（0–10） |
-| 音量锁定 | 关闭 |
-| 麦克风 / 扬声器透传 | 开启 |
+按钮位：十字键 `0x0001–0x0008`、Start `0x0010`、Back `0x0020`、L3/R3 `0x0040/0x0080`、
+LB/RB `0x0100/0x0200`、Guide `0x0400`、A/B/X/Y `0x1000/0x2000/0x4000/0x8000`。
 
-## 项目结构
+### 音频路径
 
-```
-src/
-├── main.c              入口 + FreeRTOS 任务编排 + 数据桥接
-├── bt_hid_host.c/h     BT Classic HID Host（Inquiry + SDP + L2CAP + SSP）
-├── ds5_protocol.c/h    DualSense 协议定义 + CRC32
-├── usb_gamepad.c/h     USB 复合设备（Gamepad + Boot Keyboard）
-├── ds5_usb_audio.c/h   USB Audio Class 1（4ch 48kHz ISO OUT + 2ch 48kHz ISO IN）
-├── audio.c/h           音频处理管线（sinc 重采样 + Opus 编解码 + 触觉 + 麦克风）
-├── usb_wake.c/h        USB 远程唤醒 FSM
-├── state_mgr.c/h       SetStateData 条件合并管理器
-├── config.c/h          配置系统（bt_settings + 0xF6-0xF9）
-├── dse.c/h             DualSense Edge Profile 管理
-├── remap.c/h           按键映射
-├── led_status.c/h      LED 状态指示（Ai-M61 RGB / M0S Dock 双红 / LCTech 单蓝）
-├── board_config.h      板级抽象（LED 引脚/极性、USB 类型、板名）
-├── debug_log.h         构建期日志级别宏（LOG_ERR/WRN/INF/DBG/ISR）
-└── FreeRTOSConfig.h    FreeRTOS 配置
-lib/
-├── opus/               Opus 编解码库（定点模式，xiph/opus）
-├── opus.cmake          Opus 源文件列表
-└── opus_config.h       Opus 构建配置
-firmware/               板级烧录配置 + 本地编译产物（二进制已 git 忽略）
-```
+复合构建中 interface 0 是 XUSB，interface 1–3 是 UAC1（audio control、speaker AS OUT、
+mic AS IN）。扬声器 32 kHz 立体声，麦克风 16 kHz 单声道。mic 端点是 `0x84`
+（FIFO index 4 → `FIBC3`，`0x1BC`）；扬声器是 ISO OUT `0x01`（FIFO0）。
+端点映射见 `docs/phase1-audio-spec.md`。
 
-## 架构
+### 为什么 mic FIFO 诊断按端点推导
+
+`ds4_usb_audio.c` 的 mic FIFO 占用由端点推导：`0x1B0 + 4 * ((ep & 0x7F) - 1)`
+→ DS4 `0x1B4`、XInput `0x1BC`。如果硬编码 `FIBC1`，在复合构建里读到的是 XUSB IN 的 FIFO。
+
+## 仓库结构
 
 ```
-┌──────────────┐          ┌──────────────┐          ┌──────────────┐
-│  DualSense   │◄─ BT ──►│ BL616/BL618  │◄─ USB ──►│   Host PC    │
-│  Controller  │  BR/EDR  │ LCTech/M0S/ │  HID     │  Steam/SDL   │
-└──────────────┘  HID     │   Ai-M61    │  Device   └──────────────┘
-                          └──────────────┘
+src/                        应用（BT host、USB、XInput 映射、音频）
+tools/                      host 侧工具（hidlog、描述符自检、单测）
+docs/                       设计与验收记录
+third_party/bouffalo_sdk/   vendor 的补丁 SDK（Apache-2.0）
+build.sh                    构建入口
+build_macos.sh              Linux/macOS/WSL 构建实现
+release.sh                  生成 release/
+setup_toolchain.sh          下载 Xuantie 工具链
+SDK_CHANGES.md              SDK 补丁说明
+misc/                       本地笔记/日志（gitignore）
 ```
 
-**数据流：**
+## 文档
 
-- **输入（手柄 → 主机）**：BT L2CAP 接收 Report 0x31 → 剥离 HID header/seq/CRC → 63 字节 payload 作为 USB Report 0x01 发送
-- **输出（主机 → 手柄）**：USB EP OUT 接收 Report 0x02 → State Manager 条件合并 → BT Report 0x31（78B 含 CRC32）→ L2CAP 发送
-- **音频输出（主机 → 手柄）**：USB Audio ISO OUT（4ch 48kHz）→ 双缓冲 PCM 累积 → polyphase sinc 重采样 512→480 → Opus CBR 编码（160kbps）→ 触觉降采样 → 0x39 双帧报告（547B）→ L2CAP 发送
-- **音频输入（手柄 → 主机）**：BT 0x31 麦克风 Opus 帧 → 队列 → Opus 解码（48kHz 单声道）→ 单声道转立体声 → 环形缓冲 → USB Audio ISO IN（2ch 48kHz）
-- **Feature（双向）**：GET_REPORT 从 BT 侧缓存返回（DSE profile 支持 NAK gating）| SET_REPORT 附加 CRC32 后经 L2CAP 控制通道转发
-
-## 网页配置
-
-配套的网页配置工具出于维护早期用户利益考虑，**不开源**。当前网页地址：[ps5.ds5678.top](https://ps5.ds5678.top)。开源固件仍可通过网页调整各项配置（USB Feature Report 0xF6–0xF9 / 0xFB），但**本开源版本不支持在线 OTA**。有一定动手能力的开发者可以自行实现自己的网页配置页——结合 AI 辅助，实现起来非常简单。
+| 文档 | 内容 |
+|---|---|
+| [BUILD_CN.md](BUILD_CN.md) / [BUILD.md](BUILD.md) | 工具链、编译命令、Windows 限制 |
+| [FLASHING_CN.md](FLASHING_CN.md) / [FLASHING.md](FLASHING.md) | ISP 进入、ini 布局、BLFlashCommand、Dev Cube |
+| [docs/SDK_VENDORING_CN.md](docs/SDK_VENDORING_CN.md) | SDK 如何裁剪与 vendor |
+| `SDK_CHANGES.md` | 每一处本地 SDK 补丁（base `42c20811` → local `ec8c6e9d`） |
+| `docs/phase1-verification.md` | 复合构建的硬件验收记录 |
+| `docs/phase2-gamepad-spec.md` | DS4 → XUSB 映射与连发语义 |
 
 ## 致谢
 
-- [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) —— 原始 Pico 2W 实现，核心协议参考
-- [bouffalolab/bouffalo_sdk](https://github.com/bouffalolab/bouffalo_sdk) —— BL618 SDK + Zephyr BT 栈
-- [CherryUSB](https://github.com/cherry-embedded/CherryUSB) —— USB 协议栈
-- [xiph/opus](https://github.com/xiph/opus) —— Opus 音频编解码库（定点模式）
-- Linux 内核 `hid-playstation.c` —— DualSense 协议偏移参考
-- BL618 移植由 [Cursor](https://www.cursor.com/) + Claude Opus 4.6 协助开发
+- [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle) —— 本项目的 BT/USB 骨架来源（MIT）。
+- [bouffalolab/bouffalo_sdk](https://github.com/bouffalolab/bouffalo_sdk) —— BL616 SDK，
+  已 vendor 并打补丁。
+- [CherryUSB](https://github.com/cherry-embedded/CherryUSB) —— USB device 栈。
+- `dakkidaze/ds4dongle-bl618` —— DS4 persona 的参考项目。
 
-## 许可证
+## 许可
 
-本项目采用 [GNU General Public License v3.0](LICENSE)（GPL-3.0）许可。任何在分发产品中使用或修改本代码的人，必须以相同许可证开放其源代码。
-
-### 第三方声明
-
-- 代码移植/改编自 [awalol/DS5Dongle](https://github.com/awalol/DS5Dongle)，其采用 MIT 许可证（Copyright (c) 2026 awalol）—— 完整文本见 [NOTICE](NOTICE)。
-- [lib/opus](lib/opus) 为 [xiph/opus](https://github.com/xiph/opus) 编解码库，BSD-3-Clause 许可（见 `lib/opus/LICENSE_PLEASE_READ.txt`）。
-- [CherryUSB](https://github.com/cherry-embedded/CherryUSB) 与 [bouffalolab/bouffalo_sdk](https://github.com/bouffalolab/bouffalo_sdk) 为外部构建依赖，Apache-2.0 许可。
-- Linux 内核 `hid-playstation.c`（GPL-2.0）仅作为协议/偏移参考，未包含内核代码。
+GPL-3.0，见 [LICENSE](LICENSE)。第三方声明见 [NOTICE](NOTICE)；vendor SDK 为 Apache-2.0
+（`third_party/bouffalo_sdk/LICENSE`）。
