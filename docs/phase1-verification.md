@@ -1,9 +1,8 @@
 # Phase 1 硬件验收记录（XUSB + UAC1 复合，1209:5D01）
 
-> **历史记录（身份已变更）**：本轮硬件验收是在 `0x5D01` 上完成的。当前身份为
-> `0x1209:0xD1CE`（见 `docs/identity-1209-d1ce.md`）。XUSB/音频描述符除 `idProduct`
-> 之外没有改动，但新 PID 仍需重新做一次枚举与驱动绑定检查；本文的枚举/绑定结论
-> 不能直接套用到 `0xD1CE`。
+> **历史记录（身份已变更）**：第 1–6 节是在 `0x5D01` 上完成的。当前身份为
+> `0x1209:0xD1CE`（见 `docs/identity-1209-d1ce.md`）；`0xD1CE` 的枚举/绑定/音频
+> 复核见第 7 节。XUSB/音频描述符除 `idProduct` 之外没有改动。
 
 日期：2026-10-19
 提交：`8787b3a`（身份 `eefcd55` + MS OS 防御修复）
@@ -62,4 +61,25 @@ Phase 1 通过：XUSB + UAC1 复合在 `1209:5D01` 身份下由 `usbccgp` 正常
 - DS4 persona 在本仓库只是参考副本，不是出货目标；原 `ds4dongle-bl618` 与 SDK
   未改动。共享改动的证据是 DS4 描述符字节一致 + DS4 构建通过，不需要再做
   DS4 硬件回归。
-- 正式分发前在 pid.codes 申请 `0x1209:5D01`。
+- pid.codes 申请：`0x1209:0xD1CE`（DICE）已提交 PR
+  https://github.com/pidcodes/pidcodes.github.com/pull/1324 。
+
+## 7. D1CE 复核（2026-10-19）
+
+- 固件：`release/ds4x360-bl616-xinput.bin`
+  SHA-256 `287eb278432490541e20fe3e1b07b5dccd75889c116c2bf2b89e88fd59286ad7`
+  （host SHA == dev SHA，刷写校验通过）
+- 断电重插后枚举：
+
+| 设备 | Class | Service | ProblemCode | 实例 |
+|---|---|---|---|---|
+| USB Composite Device | USB | **usbccgp** | 0 | `USB\VID_1209&PID_D1CE\...` |
+| MI_00 | XnaComposite | **xusb22** | 0 | `...&MI_00` |
+| MI_01 | MEDIA | **usbaudio** | 0 | `...&MI_01` |
+| HID 子设备 | HIDClass | HidUsb | 0 | `...&IG_01` |
+
+- 父设备硬件 ID：`USB\VID_1209&PID_D1CE&REV_0201`、`USB\VID_1209&PID_D1CE`
+- `XInputGetState(0)` ret=0，空闲 `buttons=0x0000`，2 s 251 包（125.5 Hz）
+- 音频端点出现 “(2- Xbox 360 Controller for Windows)” 的播放/录音设备
+- 结论：`0xD1CE` 与 `0x5D01` 行为一致，`usbccgp` 拆分、`xusb22`/`usbaudio`
+  绑定、XInput 与音频同时工作均正常。
