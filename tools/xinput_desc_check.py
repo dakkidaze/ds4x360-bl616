@@ -29,6 +29,7 @@ import sys
 ROOT = __file__.rsplit("/tools/", 1)[0]
 SRC_C = ROOT + "/src/usb_xinput.c"
 SRC_H = ROOT + "/src/usb_xinput.h"
+SRC_GAMEPAD = ROOT + "/src/usb_gamepad.c"
 AUDIO_H = ROOT + "/src/ds4_usb_audio_desc.h"
 
 failures = []
@@ -105,6 +106,24 @@ def evaluate_tokens(tokens, values):
         e = re.sub(r"\b(0[xX][0-9a-fA-F]+|\d+)[uUlL]+\b", r"\1", e)
         if re.search(r"[A-Za-z_]", re.sub(r"0[xX][0-9a-fA-F]+", "0", e)):
             raise SystemExit(f"cannot resolve descriptor token: {tok!r}")
+        out.append(int(eval(e, {"__builtins__": {}}, {})) & 0xFF)  # noqa: S307
+    return out
+
+
+def evaluate_byte_tokens(tokens, values):
+    """Like evaluate_tokens, but also accepts C character literals ('M')."""
+    out = []
+    for tok in tokens:
+        e = tok.strip()
+        for name, val in values.items():
+            e = re.sub(r"\b%s\b" % re.escape(name), str(val), e)
+        e = re.sub(r"\b(0[xX][0-9a-fA-F]+|\d+)[uUlL]+\b", r"\1", e)
+        m = re.fullmatch(r"'(.+)'", e)
+        if m and len(m.group(1)) == 1:
+            out.append(ord(m.group(1)))
+            continue
+        if re.search(r"[A-Za-z_]", re.sub(r"0[xX][0-9a-fA-F]+", "0", e)):
+            raise SystemExit(f"cannot resolve MS OS token: {tok!r}")
         out.append(int(eval(e, {"__builtins__": {}}, {})) & 0xFF)  # noqa: S307
     return out
 
@@ -374,6 +393,7 @@ def main():
 
     ctext = strip_comments(open(SRC_C, encoding="utf-8").read())
     htext = strip_comments(open(SRC_H, encoding="utf-8").read())
+    gtext = strip_comments(open(SRC_GAMEPAD, encoding="utf-8").read())
     values = resolve(load_defines(htext + "\n" + ctext))
 
     dev_tokens = extract_array(ctext, "xinput_device_desc")
@@ -395,12 +415,74 @@ def main():
     vid = dev[8] | (dev[9] << 8)
     pid = dev[10] | (dev[11] << 8)
     bcd = dev[12] | (dev[13] << 8)
-    check(vid == 0x045E, "idVendor == 0x045E", f"0x{vid:04X}")
-    check(pid == 0x028E, "idProduct == 0x028E", f"0x{pid:04X}")
+    check(vid == 0x1209, "idVendor == 0x1209", f"0x{vid:04X}")
+    check(pid == 0x5D01, "idProduct == 0x5D01", f"0x{pid:04X}")
     check(bcd == values.get("USB_XINPUT_BCD_DEVICE"),
           "bcdDevice == USB_XINPUT_BCD_DEVICE", f"0x{bcd:04X}")
     check(dev[16] == 0x00, "iSerialNumber == 0 (no serial, like real pad)")
     check(dev[17] == 1, "bNumConfigurations == 1")
+
+    # ---- MS OS 1.0 descriptor set (source level, both --audio modes) ----
+    # The host only fetches it when the root device has no device-ID INF
+    # match, which is the whole point of 1209:5D01: usbccgp enumerates the
+    # composite device and interface 0 binds xusb22 via USB\MS_COMP_XUSB10.
+    print("MS OS 1.0 descriptor (source)")
+    str_tokens = extract_array(ctext, "msosv1_string")
+    cid_tokens = extract_array(ctext, "msosv1_compat_id")
+    check(str_tokens is not None,
+          "msosv1_string array found in src/usb_xinput.c")
+    check(cid_tokens is not None,
+          "msosv1_compat_id array found in src/usb_xinput.c")
+
+    if str_tokens is not None:
+        s = evaluate_byte_tokens(str_tokens, values)
+        payload = "MSFT100".encode("utf-16-le")
+        check(len(s) == 18, "msosv1_string is 18 bytes", f"{len(s)}")
+        check(s[0] == 0x12, "msosv1_string bLength == 0x12", f"0x{s[0]:02x}")
+        check(s[1] == 0x03, "msosv1_string bDescriptorType == 0x03 (String)")
+        check(bytes(s[2:16]) == payload,
+              "msosv1_string payload == 'MSFT100' UTF-16LE",
+              bytes(s[2:16]).hex())
+        check(s[16] == 0x20,
+              "msosv1_string bMS_VendorCode == 0x20 (not the 0x01 XUSB "
+              "handshake)", f"0x{s[16]:02x}")
+        check(s[17] == 0x00, "msosv1_string bPad == 0x00")
+
+    if cid_tokens is not None:
+        c = evaluate_byte_tokens(cid_tokens, values)
+        check(len(c) == 40, "msosv1_compat_id is 40 bytes", f"{len(c)}")
+        check(c[0] | (c[1] << 8) | (c[2] << 16) | (c[3] << 24) == 40,
+              "compat_id dwLength == 40",
+              str(c[0] | (c[1] << 8) | (c[2] << 16) | (c[3] << 24)))
+        check(c[4] | (c[5] << 8) == 0x0100,
+              "compat_id bcdVersion == 0x0100",
+              f"0x{c[4] | (c[5] << 8):04x}")
+        check(c[6] | (c[7] << 8) == 4, "compat_id wIndex == 4",
+              str(c[6] | (c[7] << 8)))
+        check(c[8] == 1, "compat_id bCount == 1")
+        check(c[16] == 0, "compat_id bFirstInterfaceNumber == 0 (XUSB)",
+              str(c[16]))
+        check(bytes(c[18:26]) == b"XUSB10\x00\x00",
+              "compat_id compatibleID == 'XUSB10'",
+              bytes(c[18:26]))
+        check(all(b == 0 for b in c[26:34]),
+              "compat_id subCompatibleID is all zero", bytes(c[26:34]).hex())
+
+    vm = re.search(r"\.vendor_code\s*=\s*([^,\n}]+)", ctext)
+    vcode = None
+    if vm:
+        expr = vm.group(1).strip()
+        for name, val in values.items():
+            expr = re.sub(r"\b%s\b" % re.escape(name), str(val), expr)
+        try:
+            vcode = int(expr, 0)
+        except ValueError:
+            vcode = None
+    check(vcode == 0x20,
+          "msosv1 descriptor .vendor_code == 0x20",
+          f"0x{vcode:02x}" if vcode is not None else "not found")
+    check("usb_desc.msosv1_descriptor = usb_xinput_msosv1_desc();" in gtext,
+          "usb_gamepad_init() installs usb_desc.msosv1_descriptor")
 
     print("Configuration descriptor")
     total = cfg[2] | (cfg[3] << 8)

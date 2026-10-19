@@ -64,9 +64,9 @@ if [[ "${XINPUT:-}" == "1" ]]; then
     # so the default XINPUT build is the XUSB + UAC1 composite).
     FEATURE_TAG="${FEATURE_TAG}-xinput"
     if [[ "${AUDIO:-}" == "0" ]]; then
-        FEATURE_DESC="XInput (XUSB 045E:028E) persona, XUSB-only (no audio)"
+        FEATURE_DESC="XInput (XUSB 1209:5D01) persona, XUSB-only (no audio)"
     else
-        FEATURE_DESC="XInput (XUSB 045E:028E) persona + audio, no DS4 HID"
+        FEATURE_DESC="XInput (XUSB 1209:5D01) persona + audio, no DS4 HID"
     fi
 elif [[ "${GAMEPAD:-}" == "0" ]]; then
     FEATURE_TAG="${FEATURE_TAG}-nogp"
@@ -98,7 +98,7 @@ echo "[build] USB:  Full-Speed only (12 Mbps, enforced; HS not supported)"
 echo "[build] Audio: default (AUDIO=0 to disable)"
 echo "[build] Features: ${FEATURE_DESC}"
 if [[ "${XINPUT:-}" == "1" ]]; then
-    echo "[build] Persona: XInput / XUSB (VID 045E PID 028E), DS4 HID disabled"
+    echo "[build] Persona: XInput / XUSB (VID 1209 PID 5D01), DS4 HID disabled"
 fi
 
 # ── 环境变量（仅脚本执行期间生效） ──

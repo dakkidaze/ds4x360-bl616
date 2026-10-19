@@ -2,9 +2,11 @@
  * XUSB (Xbox 360 wired controller) persona.
  *
  * What this file owns:
- *   - the USB device/configuration/string descriptors for VID 045E /
- *     PID 028E (xusb22.inf matches USB\VID_045E&PID_028E directly, so the
- *     MS OS 1.0 compatible-ID chain is deliberately absent);
+ *   - the USB device/configuration/string descriptors for 1209:5D01 (no root
+ *     hardware ID matches xusb22.inf; interface 0 binds xusb22 through the
+ *     MS OS 1.0 compatible ID XUSB10);
+ *   - the MS OS 1.0 descriptor set: string 0xEE, vendor code 0x20, 40-byte
+ *     compatible-ID blob for interface 0;
  *   - the vendor-specific interface FF/5D/01 on interface 0, including the
  *     17-byte inline class descriptor (type 0x21) that XUSB requires;
  *   - the 0xC1/0x01/0x0100/wIndex=0/20-byte handshake;
@@ -37,7 +39,8 @@
 
 /*
  * Device descriptor: bDeviceClass/SubClass/Protocol = 0/0/0 (a composite
- * device; xusb22 binds by VID/PID). 64-byte EP0, Full-Speed.
+ * device; usbccgp enumerates it, xusb22 binds interface 0 via XUSB10).
+ * 64-byte EP0, Full-Speed.
  * bcdDevice lives in USB_XINPUT_BCD_DEVICE and must be bumped whenever any
  * descriptor below changes (Windows usbflags cache).
  */
@@ -155,6 +158,63 @@ const char *usb_xinput_string_desc(uint8_t index)
     case 2: return "Xbox 360 Controller for Windows";
     default: return NULL;
     }
+}
+
+/* ------------------------------------------------------------------ */
+/* MS OS 1.0 descriptor set                                           */
+/* ------------------------------------------------------------------ */
+
+/*
+ * String descriptor 0xEE (18 bytes): it advertises the vendor code the host
+ * must use to fetch the compatible-ID blob. Windows only asks for it when the
+ * root device is not claimed by a device-ID INF, which is exactly why the
+ * persona moved off 045E:028E.
+ *
+ * 0x12, 0x03, "MSFT100" in UTF-16LE, then bMS_VendorCode = 0x20 and bPad.
+ * 0x20, not 0x01: 0xC1/0x01 is the XUSB handshake and must stay unambiguous.
+ */
+static const uint8_t msosv1_string[18] = {
+    0x12,                   /* bLength */
+    0x03,                   /* bDescriptorType: String */
+    'M', 0x00, 'S', 0x00, 'F', 0x00, 'T', 0x00,
+    '1', 0x00, '0', 0x00, '0', 0x00,
+    USB_XINPUT_MSOSV1_VENDOR_CODE, 0x00,
+};
+
+/*
+ * 40-byte MS OS 1.0 compatible-ID blob (bFirstInterfaceNumber 0 = XUSB).
+ * Core returns this for bRequest 0x20 / wIndex 4; the wIndex 4 switch lives
+ * in usbd_vendor_request_handler() and runs before the class vendor handler,
+ * so it cannot collide with 0xC1/0x01.
+ */
+static const uint8_t msosv1_compat_id[40] = {
+    0x28, 0x00, 0x00, 0x00, /* dwLength = 40 */
+    0x00, 0x01,             /* bcdVersion = 0x0100 */
+    0x04, 0x00,             /* wIndex = 4 (compatible ID) */
+    0x01,                   /* bCount = 1 */
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* reserved */
+    0x00,                   /* bFirstInterfaceNumber = 0 (XUSB) */
+    0x01,                   /* reserved (must be 1) */
+    'X', 'U', 'S', 'B', '1', '0', 0x00, 0x00, /* compatibleID */
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* subCompatibleID */
+    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, /* reserved2 */
+};
+
+_Static_assert(sizeof(msosv1_string) == 18,
+               "MS OS 1.0 string descriptor must stay 18 bytes");
+_Static_assert(sizeof(msosv1_compat_id) == 40,
+               "MS OS 1.0 compatible-ID blob must stay 40 bytes");
+
+static const struct usb_msosv1_descriptor xinput_msosv1 = {
+    .string           = msosv1_string,
+    .vendor_code      = USB_XINPUT_MSOSV1_VENDOR_CODE,
+    .compat_id        = msosv1_compat_id,
+    .comp_id_property = NULL,
+};
+
+const struct usb_msosv1_descriptor *usb_xinput_msosv1_desc(void)
+{
+    return &xinput_msosv1;
 }
 
 /* ------------------------------------------------------------------ */

@@ -9,25 +9,33 @@
  * Phase 2: the 20-byte input report is produced by src/xinput_map.c from the
  * DS4 state block; this module only frames it and drives the OUT callbacks.
  *
- * Windows binds xusb22.sys through the hardware ID USB\VID_045E&PID_028E;
- * xusb22.inf contains that entry, so no MS OS 1.0 compatible-ID chain
- * (string 0xEE / 0x01 feature request) is needed and none is implemented.
- * The vendor request 0xC1/0x01 is a different thing and is implemented.
+ * The identity is pid.codes 0x1209:0x5D01, which xusb22.inf does not match by
+ * root hardware ID. Windows therefore enumerates the composite device with
+ * usbccgp and binds xusb22 to interface 0 through the MS OS 1.0 compatible ID
+ * USB\MS_COMP_XUSB10 (string 0xEE + vendor request 0x20, wIndex 4). The XUSB
+ * vendor request 0xC1/0x01 is a different thing and is implemented too.
  *
  * XInput is NOT HID: there is no report descriptor. The interface is
  * vendor-specific FF/5D/01 and carries a 17-byte inline class descriptor
  * (bDescriptorType 0x21) between the interface and its two endpoints.
  */
 
-#define USB_XINPUT_VID 0x045E
-#define USB_XINPUT_PID 0x028E
+#define USB_XINPUT_VID 0x1209 /* pid.codes shared VID */
+#define USB_XINPUT_PID 0x5D01 /* XUSB subclass 0x5D + protocol 0x01 */
 
 /*
  * bcdDevice. Windows caches device state per VID+PID+bcdDevice in
  * HKLM\SYSTEM\CurrentControlSet\Control\usbflags, so EVERY descriptor change
- * must increment this. 0x0200 = first XUSB descriptor revision.
+ * must increment this. 0x0200 = first XUSB descriptor revision,
+ * 0x0201 = 1209:5D01 identity + MS OS 1.0 XUSB10 compatible ID.
  */
-#define USB_XINPUT_BCD_DEVICE 0x0200
+#define USB_XINPUT_BCD_DEVICE 0x0201
+
+/*
+ * bMS_VendorCode of the MS OS 1.0 string descriptor 0xEE. Must NOT be 0x01:
+ * that is the XUSB handshake bRequest (0xC1/0x01/wValue 0x0100).
+ */
+#define USB_XINPUT_MSOSV1_VENDOR_CODE 0x20
 
 /*
  * Plan A endpoint reservation (BL616 has 4 data EPs / 4 FIFOs, FIFO index =
@@ -67,6 +75,12 @@ typedef void (*usb_xinput_led_cb_t)(uint8_t cmd);
 /* Descriptor accessors for usb_gamepad.c's advance-descriptor callbacks. */
 const uint8_t *usb_xinput_device_desc(void);
 const uint8_t *usb_xinput_config_desc(void);
+
+/* MS OS 1.0 descriptor set (string 0xEE + compatible-ID blob, XUSB10 on
+ * interface 0). usb_gamepad_init() installs it into usb_desc.msosv1_descriptor
+ * for the XINPUT persona only. */
+struct usb_msosv1_descriptor;
+const struct usb_msosv1_descriptor *usb_xinput_msosv1_desc(void);
 
 /* The 40-byte interface block of the XUSB-only configuration (Interface 9 +
  * inline 0x21 class descriptor 17 + EP IN 7 + EP OUT 7), for splicing into

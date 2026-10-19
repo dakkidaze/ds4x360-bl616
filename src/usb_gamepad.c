@@ -242,7 +242,7 @@ static const uint8_t *desc_device_cb(uint8_t speed)
 {
     (void)speed;
 #ifdef DS4_FEATURE_XINPUT
-    /* XUSB persona: VID/PID 045E:028E, no serial number. */
+    /* XUSB persona: 1209:5D01, no serial number. */
     return usb_xinput_device_desc();
 #else
     device_desc[16] = config_usb_sn() ? 0x03 : 0x00;
@@ -314,7 +314,7 @@ static const char *desc_string_cb(uint8_t speed, uint8_t index)
 #endif
 }
 
-static const struct usb_descriptor usb_desc = {
+static struct usb_descriptor usb_desc = {
     .device_descriptor_callback          = desc_device_cb,
     .config_descriptor_callback          = desc_config_cb,
     .device_quality_descriptor_callback  = desc_qualifier_cb,
@@ -678,6 +678,10 @@ int usb_gamepad_init(usb_gamepad_output_cb_t output_cb)
 #endif
     LOG_INF("[USB-INIT] XUSB persona: VID=%04x PID=%04x bcdDevice=%04x\n",
             USB_XINPUT_VID, USB_XINPUT_PID, USB_XINPUT_BCD_DEVICE);
+    /* MS OS 1.0: string 0xEE + XUSB10 compatible ID on interface 0. Without
+     * it usbccgp enumerates the composite device but xusb22 never binds the
+     * vendor-specific interface (no root VID/PID match any more). */
+    usb_desc.msosv1_descriptor = usb_xinput_msosv1_desc();
 #endif
 
     /* R01: build the serial string once, here, not inside the descriptor
