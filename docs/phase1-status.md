@@ -76,6 +76,35 @@
 - 装配在 `usbd_desc_register`/初始化之前完成；233/3 的静态头不会被主机看到。
 - DS4 persona 无行为回归；`0xA0/250`（500mA）有效。
 
+## 身份路径（`xusb22.inf` 实测，2026-10-19）
+
+`/mnt/c/Windows/INF/xusb22.inf` 的 Models 段只有：
+
+```
+[MSFT.NTamd64]
+%XUSB22.DeviceName.Wired%=CC_Install, USB\Vid_045E&Pid_028E
+%XUSB22.DeviceName%=CC_Install,      USB\Vid_045E&Pid_0719
+%XUSB22.DeviceName.Wired%=CC_Install, USB\MS_COMP_XUSB10
+%XUSB22.DeviceName%=CC_Install,      USB\MS_COMP_XUSB20
+%XUSB22.DeviceName.Jump%=CC_Install,  USB\Vid_045E&Pid_028F
+```
+
+没有 `MI_00` 条目，也没有 `usbccgp`。
+
+- **045E:028E + usbccgp 不会自动生效**：根硬件 ID 先匹配 `xusb22`。要改用
+  `usbccgp` 必须宿主侧自备父 INF 或手动改驱动；而 MI_00 子设备还需要
+  `USB\MS_COMP_XUSB10`（MS OS 描述符）或自备子 INF 才能绑 `xusb22`。
+  这不是即插即用。
+- **自定义 VID/PID + MS OS `XUSB10`**：没有根 INF 匹配，Windows 默认用
+  `usbccgp` 拆复合；XUSB 子设备靠 `USB\MS_COMP_XUSB10` 绑 `xusb22`，音频
+  接口按类绑 `usbaudio`。这是第三方 XInput 复合设备的标准即插即用路径。
+- **VID 不要随机生成**：VID 是全局分配资源。用 pid.codes 的 `0x1209` +
+  申请/分配的 PID（开源免费），或自有 VID。在 `0x1209` 下随手挑一个未分配
+  PID 本地能跑，但不规范；正式使用应申请。
+- 切换身份后，**XUSB-only 变体也必须带 `XUSB10`**（否则 `xusb22` 不绑）；
+  DS4 persona（054C:09CC）不受影响。
+
+
 ### 首次刷写前的前三项硬件检查
 1. 枚举与驱动归属：抓原始 233B 配置 + 完整 parent/child service 树，确认
    render/capture 设备真的存在，而不只是 xusb22 ProblemCode 0。
