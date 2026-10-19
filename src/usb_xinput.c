@@ -205,11 +205,22 @@ _Static_assert(sizeof(msosv1_string) == 18,
 _Static_assert(sizeof(msosv1_compat_id) == 40,
                "MS OS 1.0 compatible-ID blob must stay 40 bytes");
 
+/* Empty MS OS 1.0 extended-properties set (wIndex 5). The core indexes
+ * comp_id_property[wValue] without a NULL check; only interface 0 is in the
+ * compatible-ID blob, so one entry is sufficient. */
+static const uint8_t msosv1_ext_props[10] = {
+    0x0A, 0x00, 0x00, 0x00,  /* dwLength = 10 */
+    0x00, 0x01,              /* bcdVersion = 0x0100 */
+    0x05, 0x00,              /* wIndex = 5 (extended properties) */
+    0x00, 0x00,              /* wCount = 0 */
+};
+static const uint8_t *msosv1_ext_props_arr[1] = { msosv1_ext_props };
+
 static const struct usb_msosv1_descriptor xinput_msosv1 = {
     .string           = msosv1_string,
     .vendor_code      = USB_XINPUT_MSOSV1_VENDOR_CODE,
     .compat_id        = msosv1_compat_id,
-    .comp_id_property = NULL,
+    .comp_id_property = msosv1_ext_props_arr,
 };
 
 const struct usb_msosv1_descriptor *usb_xinput_msosv1_desc(void)
