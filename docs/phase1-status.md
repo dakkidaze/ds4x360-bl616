@@ -1,6 +1,10 @@
-# Phase 1 状态（暂停点）
+# Phase 1 状态
 
 日期：2026-10-19
+**更新：Phase 1 已通过硬件验收**（`1209:5D01`，XUSB + UAC1 复合，
+`usbccgp`/`xusb22`/`usbaudio` 均绑定成功；详见 `docs/phase1-verification.md`）。
+以下保留当时（身份切换前）的暂停记录。
+
 暂停原因：等 Oracle 评审结果；本轮不修、不刷。
 
 ## 代码
